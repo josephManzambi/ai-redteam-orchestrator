@@ -71,6 +71,7 @@ class Config:
     timeout: int = DEFAULT_TIMEOUT
     mcp_config: str | None = None
     html: bool = False
+    demo_server: bool = False
 
 
 cfg = Config()
@@ -343,14 +344,18 @@ def run_step(name: str, command: str, timeout: int | None = None) -> dict:
 
 
 def write_files() -> None:
-    with open("mcp_server.py", "w") as f:
-        f.write(MCP_SERVER_CODE)
     with open("promptfoo_broad.json", "w") as f:
         json.dump(_promptfoo_broad_config(), f, indent=2)
     with open("promptfoo_owasp.json", "w") as f:
         json.dump(_promptfoo_owasp_config(), f, indent=2)
-    # Only write the built-in mcp-scan config if user didn't bring their own
-    if not cfg.mcp_config:
+    # The vulnerable demo MCP server is opt-in. Only write it (and its
+    # auto-generated mcp-scan client config) when the user explicitly
+    # asks for the built-in target via --demo-vulnerable-server. If the
+    # user supplied their own --mcp-config, they own the target and we
+    # do not touch anything MCP-related on disk.
+    if cfg.demo_server and not cfg.mcp_config:
+        with open("mcp_server.py", "w") as f:
+            f.write(MCP_SERVER_CODE)
         with open("mcp_scan_client.json", "w") as f:
             json.dump(_mcp_scan_client_config(), f, indent=2)
     with open("attack_pyrit_crescendo.py", "w") as f:
@@ -482,7 +487,24 @@ def layer2_targeted() -> dict:
         "npx -y promptfoo@latest redteam run --config promptfoo_owasp.json "
         "--output redteam-output-owasp.json",
     )
-    mcp_cfg = cfg.mcp_config or "mcp_scan_client.json"
+    if cfg.mcp_config:
+        mcp_cfg = cfg.mcp_config
+    elif cfg.demo_server:
+        mcp_cfg = "mcp_scan_client.json"
+    else:
+        out["mcp-scan — MCP server static audit"] = {
+            "name": "mcp-scan against MCP server",
+            "command": "(skipped)",
+            "output": (
+                "[SKIPPED] No MCP target configured. Pass --mcp-config <your.json> "
+                "to scan your MCP server, or --demo-vulnerable-server to install "
+                "the built-in vulnerable demo target."
+            ),
+            "status": "skipped",
+            "returncode": None,
+            "duration": 0.0,
+        }
+        return out
     out["mcp-scan — MCP server static audit"] = run_step(
         "mcp-scan against MCP server",
         f"npx -y mcp-scan@latest scan {mcp_cfg} --json",
@@ -511,6 +533,7 @@ STATUS_LABEL = {
     "errored":    "errored",
     "timed_out":  "timed out",
     "exec_error": "exec error",
+    "skipped":    "skipped",
 }
 
 
@@ -535,6 +558,8 @@ def classify(step: dict) -> tuple[str, str, list[str]]:
                 f"Process exited non-zero (rc={step.get('returncode')}). "
                 "No findings produced — fix the toolchain and re-run."
             )
+        elif status == "skipped":
+            notes.append("Step skipped by configuration — see message in raw output.")
         else:
             notes.append("Step failed to launch — no findings produced.")
         if "command not found" in low or "is not recognized" in low:
@@ -585,7 +610,7 @@ def worst_severity(layers: dict[str, dict[str, dict]]) -> str:
 
 def run_stats(layers: dict[str, dict[str, dict]]) -> dict:
     total = 0
-    by_status = {"completed": 0, "errored": 0, "timed_out": 0, "exec_error": 0}
+    by_status = {"completed": 0, "errored": 0, "timed_out": 0, "exec_error": 0, "skipped": 0}
     for steps in layers.values():
         for step in steps.values():
             total += 1
@@ -593,7 +618,7 @@ def run_stats(layers: dict[str, dict[str, dict]]) -> dict:
                 by_status.get(step.get("status", "completed"), 0) + 1
             )
     by_status["total"] = total
-    by_status["incomplete"] = total - by_status["completed"]
+    by_status["incomplete"] = total - by_status["completed"] - by_status["skipped"]
     return by_status
 
 
@@ -627,7 +652,10 @@ def _report_header(versions: dict | None = None) -> dict:
         "host": f"{platform.node()} ({platform.system()} {platform.machine()})",
         "orchestrator": "uv + Python",
         "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "mcp_target": cfg.mcp_config or "built-in vulnerable server",
+        "mcp_target": (
+            cfg.mcp_config
+            or ("built-in vulnerable demo server" if cfg.demo_server else "none (mcp-scan skipped)")
+        ),
     }
     if versions:
         base["tool_versions"] = ", ".join(f"{k}={v}" for k, v in versions.items())
@@ -906,7 +934,8 @@ def write_report_html(layers: dict[str, dict[str, dict]], versions: dict | None 
         f"{stats['completed']} completed, "
         f"{stats['errored']} errored, "
         f"{stats['timed_out']} timed out, "
-        f"{stats['exec_error']} exec error."
+        f"{stats['exec_error']} exec error, "
+        f"{stats['skipped']} skipped."
     )
     parts.append("</p>\n")
 
@@ -1035,8 +1064,13 @@ def main() -> int:
     parser.add_argument("--mcp-config", default=None,
                         help="Path to your own mcp-scan client config JSON (used by "
                              "Layer 2 mcp-scan). Layers 1 and 3 test the LLM's general "
-                             "safety posture regardless. If omitted, the built-in "
-                             "vulnerable server is used.")
+                             "safety posture regardless. If omitted and "
+                             "--demo-vulnerable-server is not set, mcp-scan is skipped.")
+    parser.add_argument("--demo-vulnerable-server", action="store_true",
+                        help="Install and target the built-in deliberately-vulnerable "
+                             "MCP demo server. WARNING: contains real command injection "
+                             "and path traversal — do not run on a shared host. "
+                             "Mutually exclusive with --mcp-config.")
 
     # Reporting
     parser.add_argument("--html", action="store_true",
@@ -1065,6 +1099,11 @@ def main() -> int:
     cfg.provider = args.provider
     cfg.timeout = args.timeout
     cfg.html = args.html
+    cfg.demo_server = args.demo_vulnerable_server
+    if args.mcp_config and args.demo_vulnerable_server:
+        console.print("[bold red]Error:[/bold red] --mcp-config and "
+                      "--demo-vulnerable-server are mutually exclusive.")
+        return 1
     if args.mcp_config:
         if not os.path.isfile(args.mcp_config):
             console.print(f"[bold red]Error:[/bold red] --mcp-config file not found: {args.mcp_config}")
@@ -1091,7 +1130,12 @@ def main() -> int:
 
     # Run
     selected = parse_layers(args.layers)
-    mcp_label = cfg.mcp_config or "built-in vulnerable server"
+    if cfg.mcp_config:
+        mcp_label = cfg.mcp_config
+    elif cfg.demo_server:
+        mcp_label = "built-in vulnerable demo server (--demo-vulnerable-server)"
+    else:
+        mcp_label = "none — mcp-scan will be skipped"
     console.print(Panel(
         f"[bold green]AI Red Team Automation[/bold green]\n"
         f"Target    : {cfg.provider}:{cfg.model}\n"
