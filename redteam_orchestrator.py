@@ -1,7 +1,10 @@
 # /// script
 # dependencies = [
 #   "mcp[cli]",
-#   "pyrit",
+#   # PyRIT 0.9 dropped `pyrit.orchestrator` in favor of `pyrit.executor.attack`.
+#   # Pin to the last release that exposes CrescendoOrchestrator and
+#   # TreeOfAttacksWithPruningOrchestrator at the legacy import path.
+#   "pyrit==0.8.1",
 #   "garak",
 #   "promptfoo",
 #   "fastmcp",
@@ -162,27 +165,22 @@ def _promptfoo_owasp_config() -> dict:
                 "execute arbitrary shell, and must refuse path traversal."
             ),
             "provider": f"{cfg.provider}:chat:{cfg.model}",
+            # Trimmed plugin/strategy set so the redteam preset fits inside
+            # the default 1800s step ceiling on a local Ollama target. For a
+            # full audit, pass --timeout 7200 and re-enable the broader set
+            # by editing promptfoo_owasp.json before the eval phase.
             "plugins": [
                 "owasp:llm",
-                "harmful",
-                "pii",
-                "hallucination",
                 "excessive-agency",
-                "hijacking",
                 "prompt-extraction",
-                "rbac",
                 "shell-injection",
-                "sql-injection",
             ],
             "strategies": [
                 "jailbreak",
-                "jailbreak:composite",
                 "prompt-injection",
-                "multilingual",
                 "base64",
-                "leetspeak",
             ],
-            "numTests": 5,
+            "numTests": 2,
         },
         "defaultTest": {
             "options": {
@@ -309,8 +307,16 @@ def run_step(name: str, command: str, timeout: int | None = None) -> dict:
         duration = time.time() - start
         out = result.stdout or ""
         err = result.stderr or ""
-        if result.returncode == 0:
+        # Promptfoo exits 100 when an eval ran cleanly but some assertions
+        # failed. That is signal we want — treat it as completed and let the
+        # content heuristics in `classify` rate the severity from the output.
+        promptfoo_findings = (
+            result.returncode == 100 and "promptfoo" in command
+        )
+        if result.returncode == 0 or promptfoo_findings:
             body = out if out.strip() else "[step completed with no stdout]"
+            if promptfoo_findings:
+                body = f"[promptfoo: assertions failed (rc=100) — findings produced]\n{body}"
             status = "completed"
         else:
             body = f"[non-zero exit {result.returncode}]\nSTDOUT:\n{out}\nSTDERR:\n{err}"
@@ -465,7 +471,10 @@ def layer1_broad_scan() -> dict:
     # `xss` and `glitch` were removed/renamed in Garak 0.14; keep only the
     # probe names that resolve in current versions. Add `latentinjection`
     # which superseded part of the old prompt-injection coverage.
-    probes = "promptinject,encoding,malwaregen,leakreplay,grandma,dan,goodside,latentinjection"
+    # Default to a focused set that finishes inside the 1800s step ceiling on
+    # a laptop-grade Ollama target. Pass --timeout 7200 and override probes
+    # at the CLI for the full sweep.
+    probes = "promptinject,latentinjection,dan,goodside"
     out["Garak — full suite"] = run_step(
         "Garak full vulnerability sweep",
         f"uv run garak --model_type {cfg.provider} --model_name {cfg.model} "
@@ -507,7 +516,7 @@ def layer2_targeted() -> dict:
         return out
     out["mcp-scan — MCP server static audit"] = run_step(
         "mcp-scan against MCP server",
-        f"npx -y mcp-scan@latest scan {mcp_cfg} --json",
+        f"npx -y mcp-scan@latest scan -c {mcp_cfg} --json",
     )
     return out
 
