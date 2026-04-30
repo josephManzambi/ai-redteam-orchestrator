@@ -53,7 +53,7 @@ console = Console()
 # ---------- Defaults (overridable via CLI) ----------
 DEFAULT_MODEL = "qwen2.5:7b"
 DEFAULT_PROVIDER = "ollama"
-DEFAULT_TIMEOUT = 1800  # 30 min per step ceiling
+DEFAULT_TIMEOUT = 3600  # 60 min per step ceiling — laptop Ollama targets are slow
 
 REPORT_FILE_MD = "RedTeam_Report.md"
 REPORT_FILE_HTML = "RedTeam_Report.html"
@@ -227,16 +227,29 @@ def _pyrit_crescendo_script() -> str:
 import asyncio
 {_PYRIT_INIT_PREAMBLE}
 from pyrit.orchestrator import CrescendoOrchestrator
-from pyrit.prompt_target import OllamaChatTarget
+# PyRIT 0.8.x dropped the dedicated `OllamaChatTarget`. Talk to Ollama
+# through its OpenAI-compatible endpoint via `OpenAIChatTarget` instead.
+from pyrit.prompt_target import OpenAIChatTarget
+
+OLLAMA_ENDPOINT = "http://localhost:11434/v1/chat/completions"
+
+def _ollama_target():
+    return OpenAIChatTarget(
+        model_name="{cfg.model}",
+        endpoint=OLLAMA_ENDPOINT,
+        api_key="ollama",  # Ollama ignores it but PyRIT requires a non-empty value
+    )
 
 async def main():
     initialize_pyrit(memory_db_type=IN_MEMORY)
-    target = OllamaChatTarget(model_name="{cfg.model}")
-    adversarial = OllamaChatTarget(model_name="{cfg.model}")
+    target = _ollama_target()
+    adversarial = _ollama_target()
+    scorer = _ollama_target()
 
     orchestrator = CrescendoOrchestrator(
         objective_target=target,
         adversarial_chat=adversarial,
+        scoring_target=scorer,
         max_turns=8,
         max_backtracks=3,
     )
@@ -260,13 +273,24 @@ def _pyrit_tap_script() -> str:
 import asyncio
 {_PYRIT_INIT_PREAMBLE}
 from pyrit.orchestrator import TreeOfAttacksWithPruningOrchestrator
-from pyrit.prompt_target import OllamaChatTarget
+# PyRIT 0.8.x dropped the dedicated `OllamaChatTarget`. Talk to Ollama
+# through its OpenAI-compatible endpoint via `OpenAIChatTarget` instead.
+from pyrit.prompt_target import OpenAIChatTarget
+
+OLLAMA_ENDPOINT = "http://localhost:11434/v1/chat/completions"
+
+def _ollama_target():
+    return OpenAIChatTarget(
+        model_name="{cfg.model}",
+        endpoint=OLLAMA_ENDPOINT,
+        api_key="ollama",  # Ollama ignores it but PyRIT requires a non-empty value
+    )
 
 async def main():
     initialize_pyrit(memory_db_type=IN_MEMORY)
-    target = OllamaChatTarget(model_name="{cfg.model}")
-    adversarial = OllamaChatTarget(model_name="{cfg.model}")
-    scorer_target = OllamaChatTarget(model_name="{cfg.model}")
+    target = _ollama_target()
+    adversarial = _ollama_target()
+    scorer_target = _ollama_target()
 
     orchestrator = TreeOfAttacksWithPruningOrchestrator(
         objective_target=target,
@@ -307,16 +331,25 @@ def run_step(name: str, command: str, timeout: int | None = None) -> dict:
         duration = time.time() - start
         out = result.stdout or ""
         err = result.stderr or ""
-        # Promptfoo exits 100 when an eval ran cleanly but some assertions
-        # failed. That is signal we want — treat it as completed and let the
-        # content heuristics in `classify` rate the severity from the output.
+        # Several scanners exit non-zero when they DID run cleanly but found
+        # something — that's signal, not a toolchain failure. Treat these as
+        # completed and let the content heuristics in `classify` rate them.
+        #   - promptfoo: rc=100 when assertions fail
+        #   - mcp-scan:  rc!=0 when the JSON report contains findings
         promptfoo_findings = (
             result.returncode == 100 and "promptfoo" in command
         )
-        if result.returncode == 0 or promptfoo_findings:
+        mcp_scan_findings = (
+            "mcp-scan" in command
+            and result.returncode != 0
+            and '"totalScanned"' in out
+        )
+        if result.returncode == 0 or promptfoo_findings or mcp_scan_findings:
             body = out if out.strip() else "[step completed with no stdout]"
             if promptfoo_findings:
                 body = f"[promptfoo: assertions failed (rc=100) — findings produced]\n{body}"
+            elif mcp_scan_findings:
+                body = f"[mcp-scan: findings produced (rc={result.returncode})]\n{body}"
             status = "completed"
         else:
             body = f"[non-zero exit {result.returncode}]\nSTDOUT:\n{out}\nSTDERR:\n{err}"
