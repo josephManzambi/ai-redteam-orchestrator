@@ -1,0 +1,30 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Run tests
+        # Pin the same PyRIT version the orchestrator pins so the
+        # `test_pyrit_pinned_version_exposes_required_symbols` regression
+        # actually exercises the pinned API.
+        run: |
+          uv run \
+            --python 3.12 \
+            --with pytest \
+            --with rich \
+            --with "pyrit==0.8.1" \
+            pytest tests/ -v
