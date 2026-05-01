@@ -55,7 +55,7 @@ uv run redteam_orchestrator.py --mcp-config my.json --target mistral:7b --html
 uv run redteam_orchestrator.py --mcp-config my.json --layers 1       # broad scan only
 uv run redteam_orchestrator.py --mcp-config my.json --layers 2,3     # targeted + adversarial
 
-# Increase timeout for slow machines (default: 1800s = 30 min)
+# Increase timeout for slow machines (default: 3600s = 60 min)
 uv run redteam_orchestrator.py --mcp-config my.json --timeout 7200
 ```
 
@@ -85,7 +85,7 @@ usage: redteam_orchestrator.py [-h] [--target TARGET] [--provider PROVIDER]
 options:
   --target TARGET            Ollama model to audit (default: qwen2.5:7b)
   --provider PROVIDER        LLM provider prefix for Promptfoo (default: ollama)
-  --timeout TIMEOUT          Per-step timeout in seconds (default: 1800)
+  --timeout TIMEOUT          Per-step timeout in seconds (default: 3600)
   --mcp-config CONFIG        Path to your own mcp-scan client config JSON (Layer 2)
   --demo-vulnerable-server   Install + target the built-in vulnerable demo (off by default)
   --html                     Also generate a self-contained HTML report
@@ -103,14 +103,32 @@ options:
 
 Casts a wide net to find obvious vulnerabilities in the LLM. Independent of which MCP server (if any) is in play.
 
-- **Garak** runs prompt injection, encoding tricks, malware generation, leak replay, social engineering, and latent-injection probes against the target model.
+- **Garak** runs `promptinject`, `latentinjection`, `dan`, and `goodside`
+  probes against the target model. The probe list is intentionally focused
+  — the wider set the orchestrator originally shipped (xss, glitch,
+  malwaregen, leakreplay) was renamed or removed in Garak 0.14, and the
+  remaining heavy probes (especially the `promptinject` family) are slow
+  on a laptop 7B. Garak therefore runs under its own larger timeout
+  budget (see "Per-step timeouts" below). To run the full sweep, override
+  the `probes` variable in `layer1_broad_scan()` and bump the budget
+  further.
 - **Promptfoo eval** runs four hand-crafted test cases: command injection via `whoami`, path traversal via `../../etc/passwd`, system prompt extraction, and chained translation + injection. The local Ollama model is wired in as the `llm-rubric` grader so no `OPENAI_API_KEY` is required.
 
 ### Layer 2 — Targeted
 
 Tests against known vulnerability taxonomies and audits the MCP tool surface.
 
-- **Promptfoo redteam** generates adversarial test cases using the OWASP LLM Top-10 plugin bundle plus harmful content, PII, hallucination, excessive agency, hijacking, prompt extraction, RBAC, shell injection, and SQL injection plugins. Strategies include jailbreak, composite jailbreak, prompt injection, multilingual, base64, and leetspeak.
+- **Promptfoo redteam** generates adversarial test cases against the OWASP
+  LLM Top-10 plugin bundle plus excessive-agency, prompt-extraction, and
+  shell-injection plugins. Strategies are jailbreak, prompt-injection, and
+  base64. Scope is intentionally trimmed to keep the preset tractable on a
+  laptop-grade Ollama target — `numTests=2` × 4 plugins × 3 strategies — but
+  the redteam preset still does not always fit inside the default per-step
+  timeout on a 7B model, which is why Layer 2 has its own larger timeout
+  budget (see "Per-step timeouts" below). For a wider audit, edit
+  `_promptfoo_owasp_config()` and pass `--timeout 14400` or higher. The
+  trim is pinned by `tests/test_generated_artifacts.py` so it cannot
+  silently re-bloat.
 - **mcp-scan** statically audits an MCP server's tool descriptors for prompt injection vectors, tool poisoning, and unsafe patterns. Runs against `--mcp-config` if you provide one, the built-in demo if `--demo-vulnerable-server` is set, otherwise **skipped** with a clear note in the report.
 
 ### Layer 3 — Adversarial
@@ -118,9 +136,42 @@ Tests against known vulnerability taxonomies and audits the MCP tool surface.
 Simulates a persistent attacker using multi-turn strategies. Tests the LLM's refusal behavior; doesn't depend on which MCP server is in play.
 
 - **PyRIT Crescendo** gradually escalates across 8 turns with 3 backtracks, trying to coerce the model into shell-shaped tool calls.
-- **PyRIT TAP** (Tree of Attacks with Pruning) runs a branching search (width=3, depth=4, branching=2) to find jailbreak paths that bypass safety refusals.
+- **PyRIT TAP** (Tree of Attacks with Pruning) runs a branching search
+  (width=2, depth=2, branching=2, on-topic checking off) to find jailbreak
+  paths that bypass safety refusals. Tree shape is tuned to ~24 model calls
+  so it fits in a few minutes on a laptop 7B; bump the dimensions in
+  `_pyrit_tap_script()` for a deeper search.
 
-The PyRIT scripts include a fallback for `initialize_pyrit` so they keep working across PyRIT version churn.
+The PyRIT scripts pin PyRIT to 0.8.1 (0.9 moved orchestrators out of
+`pyrit.orchestrator`) and include a fallback for `initialize_pyrit` across
+the 0.x renames. Because PyRIT 0.8 dropped `OllamaChatTarget`, the generated
+scripts talk to Ollama through its OpenAI-compatible endpoint at
+`http://localhost:11434/v1` via `OpenAIChatTarget`. Both behaviors are
+pinned by `tests/test_generated_artifacts.py`.
+
+### Per-step timeouts
+
+Not every step is equally expensive. mcp-scan and Promptfoo's broad eval
+finish in seconds; Garak's `promptinject` family and Promptfoo's redteam
+preset can take an hour or more on a laptop 7B. To stop the slow steps
+from getting killed at the global ceiling while the fast steps don't need
+the headroom, the orchestrator uses per-layer timeout overrides:
+
+| Step                          | Timeout (seconds) |
+|-------------------------------|-------------------|
+| Garak full vulnerability sweep| 14400 (4h)        |
+| Promptfoo broad evaluation    | 3600 (uses `--timeout`) |
+| Promptfoo OWASP redteam preset| 7200 (2h)         |
+| mcp-scan static audit         | 3600 (uses `--timeout`) |
+| PyRIT Crescendo               | 3600 (uses `--timeout`) |
+| PyRIT Tree of Attacks         | 3600 (uses `--timeout`) |
+
+`--timeout N` raises the global ceiling for steps that don't have a
+per-layer override, and also raises the per-layer overrides if `N` is
+larger than the default for that step. So `--timeout 21600` will give
+Garak 6h and Promptfoo OWASP 6h. Lowering `--timeout` below the
+per-layer default does not lower the per-layer override — slow steps
+always get at least their default.
 
 ### Reports
 
@@ -196,6 +247,29 @@ uv run redteam_orchestrator.py --clean-all -y
 | `--clean-all` | Above + `ollama rm <target model>` |
 
 The orchestrator script itself (`redteam_orchestrator.py`) is never removed.
+
+## Tests
+
+The orchestrator ships with a pytest suite under `tests/` that pins the
+contracts that have actually broken in the wild:
+
+- `test_classify.py` — severity heuristics: `/etc/passwd` leak → CRITICAL,
+  jailbreak markers → HIGH, errored/timed-out steps → NOT_RUN (never
+  INFO).
+- `test_run_step.py` — exit-code handling: promptfoo `rc=100` (assertions
+  failed) and mcp-scan `rc!=0` (findings present) are both reclassified
+  as `completed`, not `errored`.
+- `test_generated_artifacts.py` — generated PyRIT scripts must parse,
+  must use `OpenAIChatTarget` (not the dropped `OllamaChatTarget`), and
+  the trimmed Promptfoo / TAP / Garak scopes are pinned so they cannot
+  silently re-bloat.
+
+```bash
+uv run --with pytest --with rich --with "pyrit==0.8.1" pytest tests/ -v
+```
+
+CI runs the same command on every push to main and every pull request
+(`.github/workflows/test.yml`).
 
 ## Troubleshooting
 

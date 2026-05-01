@@ -55,6 +55,16 @@ DEFAULT_MODEL = "qwen2.5:7b"
 DEFAULT_PROVIDER = "ollama"
 DEFAULT_TIMEOUT = 3600  # 60 min per step ceiling — laptop Ollama targets are slow
 
+# Per-step timeout overrides. Some scanners are inherently slower than
+# others on a laptop 7B target — Garak's promptinject family and
+# Promptfoo's redteam preset don't fit in DEFAULT_TIMEOUT, while
+# mcp-scan finishes in seconds. The global --timeout still acts as a
+# floor: a step's effective timeout is max(--timeout, override).
+LAYER_TIMEOUTS = {
+    "garak":           14400,  # 4h
+    "promptfoo_owasp":  7200,  # 2h
+}
+
 REPORT_FILE_MD = "RedTeam_Report.md"
 REPORT_FILE_HTML = "RedTeam_Report.html"
 APP_ID = "ai-sec-audit-001"
@@ -165,10 +175,11 @@ def _promptfoo_owasp_config() -> dict:
                 "execute arbitrary shell, and must refuse path traversal."
             ),
             "provider": f"{cfg.provider}:chat:{cfg.model}",
-            # Trimmed plugin/strategy set so the redteam preset fits inside
-            # the default 1800s step ceiling on a local Ollama target. For a
-            # full audit, pass --timeout 7200 and re-enable the broader set
-            # by editing promptfoo_owasp.json before the eval phase.
+            # Trimmed plugin/strategy set so the redteam preset stays
+            # tractable on a laptop Ollama target. Layer 2 also runs under
+            # its own larger per-layer timeout (LAYER_TIMEOUTS). For a
+            # wider audit, re-enable the broader set by editing
+            # promptfoo_owasp.json before the eval phase.
             "plugins": [
                 "owasp:llm",
                 "excessive-agency",
@@ -319,6 +330,13 @@ if __name__ == "__main__":
 
 
 # ---------- Helpers ----------
+def _step_timeout(key: str | None) -> int:
+    """Effective timeout for a step. Per-layer override floors at --timeout."""
+    if key and key in LAYER_TIMEOUTS:
+        return max(cfg.timeout, LAYER_TIMEOUTS[key])
+    return cfg.timeout
+
+
 def run_step(name: str, command: str, timeout: int | None = None) -> dict:
     """Execute a step and return a structured result dict.
 
@@ -509,15 +527,16 @@ def layer1_broad_scan() -> dict:
     # `xss` and `glitch` were removed/renamed in Garak 0.14; keep only the
     # probe names that resolve in current versions. Add `latentinjection`
     # which superseded part of the old prompt-injection coverage.
-    # Default to a focused set that finishes inside the 1800s step ceiling on
-    # a laptop-grade Ollama target. Pass --timeout 7200 and override probes
-    # at the CLI for the full sweep.
+    # Default to a focused set that finishes inside Garak's per-layer
+    # timeout on a laptop-grade Ollama target. Override the probes list
+    # here for a full sweep.
     probes = "promptinject,latentinjection,dan,goodside"
     out["Garak — full suite"] = run_step(
         "Garak full vulnerability sweep",
         f"uv run garak --model_type {cfg.provider} --model_name {cfg.model} "
         f"--probes {probes} "
         f"--report_prefix garak_report_l1",
+        timeout=_step_timeout("garak"),
     )
     out["Promptfoo — broad eval"] = run_step(
         "Promptfoo broad evaluation",
@@ -533,6 +552,7 @@ def layer2_targeted() -> dict:
         "Promptfoo OWASP redteam preset",
         "npx -y promptfoo@latest redteam run --config promptfoo_owasp.json "
         "--output redteam-output-owasp.json",
+        timeout=_step_timeout("promptfoo_owasp"),
     )
     if cfg.mcp_config:
         mcp_cfg = cfg.mcp_config
@@ -1187,7 +1207,10 @@ def main() -> int:
         f"[bold green]AI Red Team Automation[/bold green]\n"
         f"Target    : {cfg.provider}:{cfg.model}\n"
         f"Layers    : {sorted(selected)}\n"
-        f"Timeout   : {cfg.timeout}s per step\n"
+        f"Timeout   : {cfg.timeout}s per step (Garak: "
+        f"{max(cfg.timeout, LAYER_TIMEOUTS['garak'])}s, "
+        f"Promptfoo OWASP: "
+        f"{max(cfg.timeout, LAYER_TIMEOUTS['promptfoo_owasp'])}s)\n"
         f"MCP target: {mcp_label}",
         title="Start", style="green",
     ))
