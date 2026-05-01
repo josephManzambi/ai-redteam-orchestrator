@@ -46,6 +46,14 @@ import time
 
 from rich.console import Console
 from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rich.table import Table
 
 console = Console()
@@ -88,6 +96,14 @@ class Config:
 
 
 cfg = Config()
+
+
+# ---------- Live progress ----------
+# When set inside main(), each run_step call updates the bar's description to
+# the current step name and advances it on completion. Left as None during
+# cleanup so cleanup's run_step calls don't fight a non-existent display.
+_PROGRESS: Progress | None = None
+_PROGRESS_TASK_ID: int | None = None
 
 
 # ---------- Vulnerable MCP server (intentional target) ----------
@@ -337,6 +353,11 @@ def _step_timeout(key: str | None) -> int:
     return cfg.timeout
 
 
+def _advance_progress() -> None:
+    if _PROGRESS is not None and _PROGRESS_TASK_ID is not None:
+        _PROGRESS.advance(_PROGRESS_TASK_ID)
+
+
 def run_step(name: str, command: str, timeout: int | None = None) -> dict:
     """Execute a step and return a structured result dict.
 
@@ -346,6 +367,8 @@ def run_step(name: str, command: str, timeout: int | None = None) -> dict:
     t = timeout or cfg.timeout
     console.print(Panel(f"[bold]Executing[/bold] → {name}\n[dim]$ {command}[/dim]",
                         title="Layer Progress", style="bold blue"))
+    if _PROGRESS is not None and _PROGRESS_TASK_ID is not None:
+        _PROGRESS.update(_PROGRESS_TASK_ID, description=f"[cyan]{name}")
     start = time.time()
     try:
         result = subprocess.run(
@@ -377,7 +400,7 @@ def run_step(name: str, command: str, timeout: int | None = None) -> dict:
         else:
             body = f"[non-zero exit {result.returncode}]\nSTDOUT:\n{out}\nSTDERR:\n{err}"
             status = "errored"
-        return {
+        result_dict = {
             "name": name,
             "command": command,
             "output": strip_ansi(body),
@@ -385,7 +408,10 @@ def run_step(name: str, command: str, timeout: int | None = None) -> dict:
             "returncode": result.returncode,
             "duration": duration,
         }
+        _advance_progress()
+        return result_dict
     except subprocess.TimeoutExpired:
+        _advance_progress()
         return {
             "name": name,
             "command": command,
@@ -395,6 +421,7 @@ def run_step(name: str, command: str, timeout: int | None = None) -> dict:
             "duration": time.time() - start,
         }
     except Exception as e:
+        _advance_progress()
         return {
             "name": name,
             "command": command,
@@ -1093,6 +1120,26 @@ def print_summary(layers: dict[str, dict[str, dict]]) -> None:
 
 
 # ---------- Entry point ----------
+def _count_steps(selected: set[int]) -> int:
+    """Number of run_step calls the selected layers will make.
+
+    Mirrors the layer runner internals so the progress bar can show an
+    accurate total. Layer 2's mcp-scan only runs when an MCP target is
+    configured; otherwise it short-circuits to a skipped marker without
+    going through run_step.
+    """
+    n = 0
+    if 1 in selected:
+        n += 2  # Garak + Promptfoo broad
+    if 2 in selected:
+        n += 1  # Promptfoo OWASP always runs
+        if cfg.mcp_config or cfg.demo_server:
+            n += 1  # mcp-scan
+    if 3 in selected:
+        n += 2  # PyRIT Crescendo + TAP
+    return n
+
+
 def parse_layers(arg: str) -> set[int]:
     if not arg:
         return {1, 2, 3}
@@ -1220,12 +1267,32 @@ def main() -> int:
     versions = None if args.no_versions else collect_tool_versions()
 
     layers: dict[str, dict[str, dict]] = {}
-    if 1 in selected:
-        layers["Layer 1 — Broad Scan"] = layer1_broad_scan()
-    if 2 in selected:
-        layers["Layer 2 — Targeted"] = layer2_targeted()
-    if 3 in selected:
-        layers["Layer 3 — Adversarial"] = layer3_adversarial()
+    total_steps = _count_steps(selected)
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("·"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,
+    )
+    global _PROGRESS, _PROGRESS_TASK_ID
+    with progress:
+        _PROGRESS = progress
+        _PROGRESS_TASK_ID = progress.add_task("[cyan]Starting...", total=total_steps)
+        try:
+            if 1 in selected:
+                layers["Layer 1 — Broad Scan"] = layer1_broad_scan()
+            if 2 in selected:
+                layers["Layer 2 — Targeted"] = layer2_targeted()
+            if 3 in selected:
+                layers["Layer 3 — Adversarial"] = layer3_adversarial()
+            progress.update(_PROGRESS_TASK_ID, description="[green]Done")
+        finally:
+            _PROGRESS = None
+            _PROGRESS_TASK_ID = None
 
     # Reports — always complete, never short-circuit
     write_report_md(layers, versions)
