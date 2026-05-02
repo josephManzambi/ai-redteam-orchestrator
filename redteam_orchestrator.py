@@ -15,8 +15,11 @@
 """
 AI Red Team Orchestrator
 ========================
-Three-layer automated red-team pipeline against a local Ollama target with a
+Three-layer automated red-team pipeline against a local LLM target with a
 deliberately vulnerable MCP server as the system-tool surface.
+
+Implements layers 1–3 of the layered red-teaming methodology proposed by
+Amine Raji: https://aminrj.com/posts/attack-patterns-red-teaming/
 
   Layer 1 — Broad Scan  : Garak (full suite) + Promptfoo (broad eval)
   Layer 2 — Targeted    : Promptfoo OWASP LLM Top-10 preset + mcp-scan
