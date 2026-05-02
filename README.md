@@ -1,6 +1,6 @@
 # 🛡️ AI Red Team Orchestrator
 
-A single-file, three-layer automated red-team pipeline for auditing LLMs and MCP tool servers. Runs entirely locally against [Ollama](https://ollama.com), using [`uv`](https://docs.astral.sh/uv/) for zero-config dependency management.
+A single-file, three-layer automated red-team pipeline for auditing LLMs and MCP tool servers, implementing layers 1–3 of the methodology proposed by [Amine Raji](https://aminrj.com/posts/attack-patterns-red-teaming/). Runs entirely locally against [Ollama](https://ollama.com), using [`uv`](https://docs.astral.sh/uv/) for zero-config dependency management.
 
 Point it at your own MCP server and the orchestrator throws four industry-standard attack frameworks at it:
 
@@ -337,6 +337,21 @@ Likely Promptfoo's generation phase is trying to reach OpenAI instead of Ollama.
 ## Disclaimer
 
 This tool is for **authorized security testing only**. The optional demo MCP server (installed only via `--demo-vulnerable-server`) contains real command injection and path traversal vulnerabilities — do not expose it to untrusted networks or users. Always obtain proper authorization before red-teaming any system you do not own.
+
+## Acknowledgments
+
+The three-layer structure of this orchestrator (Broad Scan → Targeted →
+Adversarial) follows the layered red-teaming methodology proposed by
+Amine Raji in [LLM Red Teaming Tools: PyRIT & Garak (2025
+Guide)](https://aminrj.com/posts/attack-patterns-red-teaming/), which
+maps the four-layer testing strategy across Garak, Promptfoo, and PyRIT.
+This project implements layers 1-3 as a single-file, CI-friendly
+artifact; layer 4 (manual expert testing) is intentionally outside its
+scope, since no orchestrator replaces a human who has read your codebase.
+
+Read his article first if you want the threat-model framework, the
+OWASP Agentic Top 10 / MITRE ATLAS / CSA mapping, and the case studies
+that motivate why agentic AI testing needs its own methodology.
 
 ## License
 
