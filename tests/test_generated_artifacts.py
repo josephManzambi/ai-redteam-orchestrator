@@ -98,9 +98,9 @@ def test_promptfoo_owasp_config_scope_fits_default_timeout(orchestrator):
     """Trim was deliberate — guard against re-bloating to the timing-out scope."""
     cfg = orchestrator._promptfoo_owasp_config()
     rt = cfg["redteam"]
-    assert rt["numTests"] <= 3, "numTests > 3 timed out @1800s on a laptop"
-    assert len(rt["plugins"]) <= 6
-    assert len(rt["strategies"]) <= 4
+    assert rt["numTests"] <= 2, "numTests > 2 timed out on a laptop 7B"
+    assert len(rt["plugins"]) <= 5
+    assert len(rt["strategies"]) <= 3
 
 
 def test_garak_default_probe_set_is_focused(orchestrator):
@@ -116,7 +116,7 @@ def test_garak_default_probe_set_is_focused(orchestrator):
     assert m, "could not find `probes = \"...\"` assignment"
     probe_str = m.group(1)
     probes = set(probe_str.split(","))
-    assert "promptinject" in probes
+    assert "latentinjection" in probes
     # The probes that were removed/renamed in Garak 0.14 must stay out.
     assert "xss" not in probes
     assert "glitch" not in probes

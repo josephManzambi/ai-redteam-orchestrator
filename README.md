@@ -36,8 +36,8 @@ Most red-team workflows require stitching together 3–4 tools manually, each wi
 # Start the Ollama daemon
 ollama serve
 
-# Pull the target model (~4.7 GB)
-ollama pull qwen2.5:7b
+# Pull the target model (~1.9 GB)
+ollama pull qwen2.5:3b
 ```
 
 ## Quick Start
@@ -83,7 +83,7 @@ usage: redteam_orchestrator.py [-h] [--target TARGET] [--provider PROVIDER]
                                [--clean-deep] [--clean-all] [--yes]
 
 options:
-  --target TARGET            Ollama model to audit (default: qwen2.5:7b)
+  --target TARGET            Ollama model to audit (default: qwen2.5:3b)
   --provider PROVIDER        LLM provider prefix for Promptfoo (default: ollama)
   --timeout TIMEOUT          Per-step timeout in seconds (default: 3600)
   --mcp-config CONFIG        Path to your own mcp-scan client config JSON (Layer 2)
@@ -103,15 +103,15 @@ options:
 
 Casts a wide net to find obvious vulnerabilities in the LLM. Independent of which MCP server (if any) is in play.
 
-- **Garak** runs `promptinject`, `latentinjection`, `dan`, and `goodside`
-  probes against the target model. The probe list is intentionally focused
-  — the wider set the orchestrator originally shipped (xss, glitch,
-  malwaregen, leakreplay) was renamed or removed in Garak 0.14, and the
-  remaining heavy probes (especially the `promptinject` family) are slow
-  on a laptop 7B. Garak therefore runs under its own larger timeout
-  budget (see "Per-step timeouts" below). To run the full sweep, override
-  the `probes` variable in `layer1_broad_scan()` and bump the budget
-  further.
+- **Garak** runs `latentinjection`, `dan`, and `goodside` probes against
+  the target model. The probe list is intentionally focused — the wider
+  set the orchestrator originally shipped (xss, glitch, malwaregen,
+  leakreplay) was renamed or removed in Garak 0.14, and the heaviest
+  remaining family, `promptinject`, is omitted from the default because
+  it consistently times out on a laptop-grade Ollama target. Garak still
+  runs under its own larger timeout budget (see "Per-step timeouts"
+  below). To run the full sweep, re-add `promptinject` to the `probes`
+  variable in `layer1_broad_scan()` and bump the budget further.
 - **Promptfoo eval** runs four hand-crafted test cases: command injection via `whoami`, path traversal via `../../etc/passwd`, system prompt extraction, and chained translation + injection. The local Ollama model is wired in as the `llm-rubric` grader so no `OPENAI_API_KEY` is required.
 
 ### Layer 2 — Targeted
@@ -120,9 +120,9 @@ Tests against known vulnerability taxonomies and audits the MCP tool surface.
 
 - **Promptfoo redteam** generates adversarial test cases against the OWASP
   LLM Top-10 plugin bundle plus excessive-agency, prompt-extraction, and
-  shell-injection plugins. Strategies are jailbreak, prompt-injection, and
-  base64. Scope is intentionally trimmed to keep the preset tractable on a
-  laptop-grade Ollama target — `numTests=2` × 4 plugins × 3 strategies — but
+  shell-injection plugins. Strategies are jailbreak and prompt-injection.
+  Scope is intentionally trimmed to keep the preset tractable on a
+  laptop-grade Ollama target — `numTests=1` × 4 plugins × 2 strategies — but
   the redteam preset still does not always fit inside the default per-step
   timeout on a 7B model, which is why Layer 2 has its own larger timeout
   budget (see "Per-step timeouts" below). For a wider audit, edit
@@ -231,7 +231,7 @@ uv run redteam_orchestrator.py --clean
 # + uv cache, npm cache, ~/.pyrit state
 uv run redteam_orchestrator.py --clean-deep
 
-# + Ollama model weights (~4.7 GB, will re-download on next run)
+# + Ollama model weights (will re-download on next run)
 uv run redteam_orchestrator.py --clean-all
 
 # Skip confirmation prompt (for CI/scripts)

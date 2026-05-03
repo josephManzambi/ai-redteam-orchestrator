@@ -62,7 +62,7 @@ from rich.table import Table
 console = Console()
 
 # ---------- Defaults (overridable via CLI) ----------
-DEFAULT_MODEL = "qwen2.5:7b"
+DEFAULT_MODEL = "qwen2.5:3b"
 DEFAULT_PROVIDER = "ollama"
 DEFAULT_TIMEOUT = 3600  # 60 min per step ceiling — laptop Ollama targets are slow
 
@@ -195,9 +195,10 @@ def _promptfoo_owasp_config() -> dict:
             ),
             "provider": f"{cfg.provider}:chat:{cfg.model}",
             # Trimmed plugin/strategy set so the redteam preset stays
-            # tractable on a laptop Ollama target. Layer 2 also runs under
-            # its own larger per-layer timeout (LAYER_TIMEOUTS). For a
-            # wider audit, re-enable the broader set by editing
+            # tractable on a laptop Ollama target. Current scope is
+            # 1 × 4 plugins × 2 strategies. Layer 2 also runs under its
+            # own larger per-layer timeout (LAYER_TIMEOUTS). For a wider
+            # audit, re-enable the broader set by editing
             # promptfoo_owasp.json before the eval phase.
             "plugins": [
                 "owasp:llm",
@@ -208,9 +209,8 @@ def _promptfoo_owasp_config() -> dict:
             "strategies": [
                 "jailbreak",
                 "prompt-injection",
-                "base64",
             ],
-            "numTests": 2,
+            "numTests": 1,
         },
         "defaultTest": {
             "options": {
@@ -560,7 +560,11 @@ def layer1_broad_scan() -> dict:
     # Default to a focused set that finishes inside Garak's per-layer
     # timeout on a laptop-grade Ollama target. Override the probes list
     # here for a full sweep.
-    probes = "promptinject,latentinjection,dan,goodside"
+    # `promptinject` is the heaviest probe family by far and is omitted
+    # from the default to keep Layer 1 tractable on laptop-grade Ollama
+    # targets. Re-add it here for a deeper sweep (and bump the Garak
+    # per-layer timeout accordingly).
+    probes = "latentinjection,dan,goodside"
     out["Garak — full suite"] = run_step(
         "Garak full vulnerability sweep",
         f"uv run garak --model_type {cfg.provider} --model_name {cfg.model} "
@@ -649,7 +653,12 @@ def classify(step: dict) -> tuple[str, str, list[str]]:
     # Did not actually produce findings — flag that explicitly.
     if status != "completed":
         if status == "timed_out":
-            notes.append("Step timed out before completion — no findings produced.")
+            duration = step.get("duration", 0)
+            notes.append(
+                f"Step timed out after {duration:.0f}s — no findings produced. "
+                f"Re-run with a higher --timeout, trim scope in the relevant layer "
+                f"runner, or use a smaller target model."
+            )
         elif status == "errored":
             notes.append(
                 f"Process exited non-zero (rc={step.get('returncode')}). "
@@ -1231,7 +1240,7 @@ def main() -> int:
     if args.clean_all:
         if not args.yes:
             console.print(f"[bold yellow]--clean-all will remove the Ollama model "
-                          f"'{cfg.model}' (~4.7 GB) and all caches.[/bold yellow]")
+                          f"'{cfg.model}' and all caches.[/bold yellow]")
             ans = input("Continue? [y/N]: ").strip().lower()
             if ans not in ("y", "yes"):
                 console.print("[red]Aborted.[/red]")
