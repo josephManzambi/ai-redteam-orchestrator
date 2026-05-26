@@ -334,6 +334,29 @@ Likely Promptfoo's generation phase is trying to reach OpenAI instead of Ollama.
 └── mcp_scan_client.json        # mcp-scan target descriptor for the demo
 ```
 
+## Known Limitations
+
+- **The same model is used as target, attacker, and scorer.** In Layer 3 the
+  generated PyRIT scripts wire one Ollama model into all three roles —
+  `objective_target`, `adversarial_chat`, and `scoring_target` (see
+  `_ollama_target()` in `_pyrit_crescendo_script()` and
+  `_pyrit_tap_script()`). A small local model is a weak adversary *and* a
+  self-biased judge, which materially weakens the adversarial layer: it may
+  miss attacks a stronger attacker would find, and may grade its own
+  borderline successes as refusals. Treat a "clean" Layer 3 result as
+  low-confidence. For a real assessment, point the adversarial and scoring
+  targets at a stronger, separate model.
+- **Severity classification is heuristic.** `classify()` derives severity
+  from word-boundary keyword matches in tool output. It is precise enough to
+  avoid the obvious false positives ("0 failures", probe names containing
+  "exploit"), but it can still miss novel phrasings — it is not a substitute
+  for reading the raw output captured in the report.
+- **Scope is trimmed for laptop-grade targets.** The default Garak probe set,
+  the Promptfoo OWASP plugin/strategy bundle, and the TAP tree size are all
+  reduced so a run completes on a laptop Ollama target. A serious audit should
+  widen them (see the per-layer notes above) and raise the timeouts.
+- **Layer 4 (manual expert testing) is out of scope** — see Acknowledgments.
+
 ## Disclaimer
 
 This tool is for **authorized security testing only**. The optional demo MCP server (installed only via `--demo-vulnerable-server`) contains real command injection and path traversal vulnerabilities — do not expose it to untrusted networks or users. Always obtain proper authorization before red-teaming any system you do not own.
