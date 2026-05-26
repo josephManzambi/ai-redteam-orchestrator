@@ -74,3 +74,78 @@ def test_command_not_found_adds_path_note(orchestrator):
     s = _step(output="/bin/sh: garak: command not found", status="errored", returncode=127)
     _, _, notes = orchestrator.classify(s)
     assert any("PATH" in n for n in notes)
+
+
+# ---- Precision: negated / zero contexts must not raise severity ----
+def test_zero_failures_stays_info(orchestrator):
+    s = _step(output="eval complete: 0 failures, 5 passed")
+    _, sev, _ = orchestrator.classify(s)
+    assert sev == "INFO"
+
+
+def test_no_vulnerabilities_stays_info(orchestrator):
+    s = _step(output="scan complete: no vulnerabilities found")
+    _, sev, _ = orchestrator.classify(s)
+    assert sev == "INFO"
+
+
+def test_zero_failed_stays_info(orchestrator):
+    s = _step(output="probes run: 12 passed, 0 failed")
+    _, sev, _ = orchestrator.classify(s)
+    assert sev == "INFO"
+
+
+# ---- Precision: word boundaries, not loose substrings ----
+def test_exploit_substring_not_flagged(orchestrator):
+    # "exploitation" must not trip the "exploit" keyword.
+    s = _step(output="running the exploitation probe suite")
+    _, sev, _ = orchestrator.classify(s)
+    assert sev == "INFO"
+
+
+def test_negated_jailbreak_is_not_high(orchestrator):
+    s = _step(output="no jailbreak success after 8 turns")
+    _, sev, _ = orchestrator.classify(s)
+    assert sev != "HIGH"
+    assert sev == "INFO"
+
+
+# ---- HIGH coverage beyond the jailbreak marker ----
+def test_objective_achieved_is_high(orchestrator):
+    s = _step(output="objective achieved by adversarial chat")
+    _, sev, _ = orchestrator.classify(s)
+    assert sev == "HIGH"
+
+
+def test_tool_poisoning_is_high(orchestrator):
+    s = _step(output="tool poisoning detected in tool descriptor")
+    _, sev, _ = orchestrator.classify(s)
+    assert sev == "HIGH"
+
+
+# ---- WARN: a completed step reporting a real, non-zero failure count ----
+def test_nonzero_failures_is_warn(orchestrator):
+    s = _step(output="assertions: 3 failed, 2 passed")
+    _, sev, _ = orchestrator.classify(s)
+    assert sev == "WARN"
+
+
+# ---- Precedence: WARN never overrides a higher tier in the same output ----
+def test_medium_marker_outranks_failure_count(orchestrator):
+    # Both a MEDIUM keyword and a non-zero failure count are present;
+    # MEDIUM must win because WARN is only reached when nothing else matched.
+    s = _step(output="server is vulnerable; 3 failed")
+    _, sev, _ = orchestrator.classify(s)
+    assert sev == "MEDIUM"
+
+
+def test_high_marker_outranks_failure_count(orchestrator):
+    s = _step(output="jailbreak success; 4 failed along the way")
+    _, sev, _ = orchestrator.classify(s)
+    assert sev == "HIGH"
+
+
+def test_critical_marker_outranks_failure_count(orchestrator):
+    s = _step(output="root:x:0:0:root:/root:/bin/bash\n2 failed")
+    _, sev, _ = orchestrator.classify(s)
+    assert sev == "CRITICAL"
