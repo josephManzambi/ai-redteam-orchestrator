@@ -46,6 +46,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.request
 
 from rich.console import Console
 from rich.panel import Panel
@@ -1239,6 +1240,44 @@ REQUIRED_TOOLS = {
 }
 
 
+def _ollama_base_url() -> str:
+    """Ollama HTTP base URL, honoring OLLAMA_HOST (default localhost:11434)."""
+    host = os.environ.get("OLLAMA_HOST", "").strip()
+    if not host:
+        return "http://127.0.0.1:11434"
+    if not host.startswith(("http://", "https://")):
+        host = "http://" + host
+    return host.rstrip("/")
+
+
+def _model_available(model: str, names: list[str]) -> bool:
+    """Whether the target model is among installed Ollama tags.
+
+    Exact tag match, or — when the user gave no ':tag' — any install whose
+    name before the colon matches (so 'qwen2.5' accepts 'qwen2.5:3b').
+    """
+    if model in names:
+        return True
+    if ":" not in model:
+        return any(n.split(":")[0] == model for n in names)
+    return False
+
+
+def _check_ollama(model: str) -> tuple[str, list[str]]:
+    """Probe the Ollama server. Returns (state, installed_names).
+
+    state ∈ {ok, model_missing, down}. 'down' means the HTTP API at
+    OLLAMA_HOST did not answer — the server is not running.
+    """
+    try:
+        with urllib.request.urlopen(_ollama_base_url() + "/api/tags", timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception:
+        return "down", []
+    names = [m.get("name", "") for m in data.get("models", [])]
+    return ("ok" if _model_available(model, names) else "model_missing"), names
+
+
 def preflight() -> None:
     """Verify required executables are on PATH before starting a run.
 
@@ -1246,6 +1285,12 @@ def preflight() -> None:
     summary. If any required tool is missing, lists the steps it would break
     and exits non-zero — a run that starts without these only fails halfway
     through. Cleanup paths skip this check (see main).
+
+    The ollama *binary* being present is not enough: every layer sends
+    prompts to the model, so a dead server or a missing target model is also
+    fatal. When the provider is ollama, additionally verify the HTTP API
+    answers and the target model is pulled — otherwise each step burns its
+    full timeout (the OWASP step alone can waste 2h) before erroring.
     """
     table = Table(title="Preflight — required tools")
     table.add_column("Tool", style="cyan")
@@ -1271,6 +1316,39 @@ def preflight() -> None:
             title="Preflight failed", style="red",
         ))
         sys.exit(1)
+
+    # The ollama binary on PATH says nothing about the server or the model.
+    # Verify both up front so a dead server fails in seconds, not over the
+    # full per-step timeout budget.
+    if cfg.provider == "ollama":
+        base = _ollama_base_url()
+        state, names = _check_ollama(cfg.model)
+        if state == "down":
+            console.print(Panel(
+                f"[bold red]Ollama server not reachable[/bold red] at {base}\n\n"
+                "Every layer sends prompts to the target model; without a running "
+                "server each step fails only after exhausting its timeout (the OWASP "
+                "step alone can burn 2h before erroring).\n\n"
+                "Start it in another terminal, then re-run:\n"
+                "  [bold]ollama serve[/bold]\n"
+                f"  [bold]ollama pull {cfg.model}[/bold]",
+                title="Preflight failed", style="red",
+            ))
+            sys.exit(1)
+        if state == "model_missing":
+            installed = ", ".join(n for n in names if n) or "(none installed)"
+            console.print(Panel(
+                f"[bold red]Target model '{cfg.model}' not installed in Ollama[/bold red]\n\n"
+                f"Reachable at {base}, but installed models are: {installed}\n\n"
+                "Pull the target and re-run:\n"
+                f"  [bold]ollama pull {cfg.model}[/bold]",
+                title="Preflight failed", style="red",
+            ))
+            sys.exit(1)
+        console.print(
+            f"[green]Ollama reachable[/green] at {base} "
+            f"[dim]· target model '{cfg.model}' available[/dim]"
+        )
 
 
 def main() -> int:
