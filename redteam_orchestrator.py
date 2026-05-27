@@ -1,4 +1,10 @@
 # /// script
+# # Pin below Python 3.14: garak's transitive deps (dill / HuggingFace
+# # datasets) call the old pickle._batch_setitems signature, which 3.14
+# # removed, crashing dataset-backed probes with a TypeError. 3.12 is verified
+# # clean. This governs the env for the orchestrator AND its `uv run garak` /
+# # `uv run python attack_pyrit_*.py` subprocesses, which inherit it.
+# requires-python = ">=3.10,<3.13"
 # dependencies = [
 #   "mcp[cli]",
 #   # PyRIT 0.9 dropped `pyrit.orchestrator` in favor of `pyrit.executor.attack`.
@@ -585,10 +591,10 @@ def layer1_broad_scan() -> dict:
     # (heaviest / least on-target), and multimodal `audio` / `visual_jailbreak`
     # (the target is text-only). `xss` became `web_injection` in Garak 0.14.
     probes = ",".join([
-        # indirect / latent prompt injection — core MCP threat surface
+        # indirect / latent prompt injection — core MCP threat surface.
+        # One representative probe: each latentinjection probe is ~512
+        # long-context calls, so it dominates Layer 1's runtime; keep just one.
         "latentinjection.LatentInjectionFactSnippetEiffel",
-        "latentinjection.LatentJailbreak",
-        "latentinjection.LatentWhois",
         # direct jailbreaks — light single-prompt classics, not the heavy
         # active dan.* members
         "dan.Dan_11_0", "dan.AntiDAN", "dan.DUDE",
@@ -596,8 +602,9 @@ def layer1_broad_scan() -> dict:
         "goodside",
         # terminal / ANSI-escape injection in tool output
         "ansiescape",
-        # encoded-payload smuggling — representative encodings
-        "encoding.InjectBase64", "encoding.InjectROT13", "encoding.InjectHex",
+        # NOTE: `encoding.*` probes are intentionally excluded — each expands
+        # to ~512 prompts regardless of --generations, blowing the budget for
+        # marginal breadth on a text-only laptop target.
         # markdown / web injection & data exfil (formerly `xss`)
         "web_injection.MarkdownImageExfil", "web_injection.MarkdownXSS",
         # code / template / SQL injection — tool-execution surface
