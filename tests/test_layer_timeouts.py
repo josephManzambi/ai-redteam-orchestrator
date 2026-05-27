@@ -8,15 +8,17 @@ from __future__ import annotations
 
 
 def test_layer_timeouts_dict_has_expected_keys(orchestrator):
-    assert "garak" in orchestrator.LAYER_TIMEOUTS
+    # Garak is now a breadth-first, depth-1 scan that finishes in minutes, so
+    # it no longer needs an elevated ceiling — it uses DEFAULT_TIMEOUT.
+    assert "garak" not in orchestrator.LAYER_TIMEOUTS
     assert "promptfoo_owasp" in orchestrator.LAYER_TIMEOUTS
-    assert orchestrator.LAYER_TIMEOUTS["garak"] >= 14400
     assert orchestrator.LAYER_TIMEOUTS["promptfoo_owasp"] >= 7200
 
 
 def test_step_timeout_uses_override_when_global_is_lower(orchestrator):
     orchestrator.cfg.timeout = 1800
-    assert orchestrator._step_timeout("garak") == 14400
+    # No garak override → falls back to the (lower) global timeout.
+    assert orchestrator._step_timeout("garak") == 1800
     assert orchestrator._step_timeout("promptfoo_owasp") == 7200
 
 
