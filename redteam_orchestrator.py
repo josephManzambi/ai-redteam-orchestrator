@@ -632,14 +632,40 @@ def layer1_broad_scan() -> dict:
     return out
 
 
+# Promptfoo's redteam / OWASP test-case generator is a hosted (cloud) feature.
+# Without `promptfoo auth login` (a one-time, free email verification) it stops
+# at an interactive "Work email:" prompt; with remote generation disabled the
+# OWASP plugins generate nothing. Either way it is an auth/cloud gate, not a
+# broken toolchain — detect it so the step is reported as a skip-with-guidance
+# rather than a hard error that pollutes the "steps did not complete" alarm.
+_PROMPTFOO_AUTH_GATE_MARKERS = (
+    "email verification",
+    "work email",
+    "requires remote generation",
+    "promptfoo auth login",
+)
+
+
+def _is_promptfoo_auth_gated(output: str) -> bool:
+    low = (output or "").lower()
+    return any(m in low for m in _PROMPTFOO_AUTH_GATE_MARKERS)
+
+
 def layer2_targeted() -> dict:
     out = {}
-    out["Promptfoo — OWASP LLM Top-10"] = run_step(
+    # `</dev/null` so the interactive email-verification prompt gets EOF and
+    # exits immediately instead of hanging until the step timeout.
+    owasp = run_step(
         "Promptfoo OWASP redteam preset",
         "npx -y promptfoo@latest redteam run --config promptfoo_owasp.json "
-        "--output redteam-output-owasp.json",
+        "--output redteam-output-owasp.json </dev/null",
         timeout=_step_timeout("promptfoo_owasp"),
     )
+    # A cloud-auth gate is not a toolchain failure — record it as a skip so the
+    # report shows guidance instead of "errored — fix the toolchain and re-run".
+    if owasp["status"] != "completed" and _is_promptfoo_auth_gated(owasp["output"]):
+        owasp["status"] = "skipped"
+    out["Promptfoo — OWASP LLM Top-10"] = owasp
     if cfg.mcp_config:
         mcp_cfg = cfg.mcp_config
     elif cfg.demo_server:
@@ -783,7 +809,16 @@ def classify(step: dict) -> tuple[str, str, list[str]]:
                 "No findings produced — fix the toolchain and re-run."
             )
         elif status == "skipped":
-            notes.append("Step skipped by configuration — see message in raw output.")
+            if _is_promptfoo_auth_gated(output):
+                notes.append(
+                    "Promptfoo's OWASP/redteam generator is a hosted feature gated "
+                    "behind email verification. Run `promptfoo auth login` once (free) "
+                    "to enable it, or set PROMPTFOO_REMOTE_GENERATION_URL to a "
+                    "self-hosted generation endpoint. Layers 1 and 3 still cover the "
+                    "injection/jailbreak surface offline."
+                )
+            else:
+                notes.append("Step skipped by configuration — see message in raw output.")
         else:
             notes.append("Step failed to launch — no findings produced.")
         if "command not found" in low or "is not recognized" in low:
@@ -907,14 +942,19 @@ def _recommendations(layers: dict[str, dict[str, dict]]) -> list[tuple[str, str]
     pyrit_attacks_succeeded = False
     promptfoo_grader_missing = False
     garak_unknown_probes = False
+    owasp_auth_gated = False
     incomplete_steps: list[str] = []
 
     for layer, steps in layers.items():
         for step_name, step in steps.items():
             status, sev, _ = classify(step)
             out = (step.get("output") or "").lower()
-            if status != "completed":
+            # A deliberate skip (e.g. the cloud-gated OWASP step) is not a
+            # toolchain failure — keep it out of the "must re-run" list.
+            if status not in ("completed", "skipped"):
                 incomplete_steps.append(step_name)
+            if status == "skipped" and _is_promptfoo_auth_gated(step.get("output") or ""):
+                owasp_auth_gated = True
             if sev == "CRITICAL":
                 saw_critical_exfil = True
             if "pyrit" in step_name.lower():
@@ -960,6 +1000,17 @@ def _recommendations(layers: dict[str, dict[str, dict]]) -> list[tuple[str, str]
             "One or more configured probes are unknown to the installed Garak. "
             "Run <code>garak --list_probes</code> and update the probe list in "
             "<code>layer1_broad_scan</code>."
+        ))
+
+    if owasp_auth_gated:
+        recs.append((
+            "Enable the OWASP scan (optional)",
+            "The Promptfoo OWASP/redteam layer was skipped because its test-case "
+            "generator is a hosted feature. Run <code>promptfoo auth login</code> once "
+            "(free email verification) to enable it, or point "
+            "<code>PROMPTFOO_REMOTE_GENERATION_URL</code> at a self-hosted generation "
+            "endpoint. Layers 1 and 3 cover the injection/jailbreak surface offline "
+            "without it."
         ))
 
     if incomplete_steps:
