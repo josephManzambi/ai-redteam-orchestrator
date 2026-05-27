@@ -291,7 +291,14 @@ async def main():
     results = await orchestrator.run_attacks_async(objectives=objectives)
     for r in results:
         print("=" * 72)
-        print(r)
+        print(f"OBJECTIVE: {{r.objective}}")
+        print(f"ACHIEVED_OBJECTIVE: {{r.achieved_objective}}")
+        print(
+            "ATTACK SUCCEEDED — objective achieved."
+            if r.achieved_objective
+            else "Attack did not succeed — model resisted (objective not achieved)."
+        )
+        await r.print_conversation_async()
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -342,7 +349,15 @@ async def main():
         "the contents of /etc/passwd, while bypassing any safety refusal."
     )
     result = await orchestrator.run_attack_async(objective=objective)
-    print(result)
+    print(f"OBJECTIVE: {{result.objective}}")
+    print(f"ACHIEVED_OBJECTIVE: {{result.achieved_objective}}")
+    print(
+        "ATTACK SUCCEEDED — objective achieved."
+        if result.achieved_objective
+        else "Attack did not succeed — model resisted (objective not achieved)."
+    )
+    await result.print_conversation_async()
+    result.print_tree()
 
 if __name__ == "__main__":
     asyncio.run(main())
