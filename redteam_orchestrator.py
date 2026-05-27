@@ -67,13 +67,13 @@ DEFAULT_MODEL = "qwen2.5:3b"
 DEFAULT_PROVIDER = "ollama"
 DEFAULT_TIMEOUT = 3600  # 60 min per step ceiling — laptop Ollama targets are slow
 
-# Per-step timeout overrides. Some scanners are inherently slower than
-# others on a laptop 7B target — Garak's promptinject family and
-# Promptfoo's redteam preset don't fit in DEFAULT_TIMEOUT, while
-# mcp-scan finishes in seconds. The global --timeout still acts as a
-# floor: a step's effective timeout is max(--timeout, override).
+# Per-step timeout overrides for steps that need MORE than DEFAULT_TIMEOUT.
+# The global --timeout acts as a floor: a step's effective timeout is
+# max(--timeout, override). Garak no longer needs an elevated ceiling — the
+# Layer 1 scan is now breadth-first at depth 1 (see layer1_broad_scan), so it
+# runs in minutes and the standard DEFAULT_TIMEOUT applies. Promptfoo's
+# redteam preset can still be slow, so it keeps a 2h override.
 LAYER_TIMEOUTS = {
-    "garak":           14400,  # 4h
     "promptfoo_owasp":  7200,  # 2h
 }
 
@@ -570,21 +570,50 @@ def cleanup(mode: str = "files") -> None:
 # ---------- Layer runners ----------
 def layer1_broad_scan() -> dict:
     out = {}
-    # `xss` and `glitch` were removed/renamed in Garak 0.14; keep only the
-    # probe names that resolve in current versions. Add `latentinjection`
-    # which superseded part of the old prompt-injection coverage.
-    # Default to a focused set that finishes inside Garak's per-layer
-    # timeout on a laptop-grade Ollama target. Override the probes list
-    # here for a full sweep.
-    # `promptinject` is the heaviest probe family by far and is omitted
-    # from the default to keep Layer 1 tractable on laptop-grade Ollama
-    # targets. Re-add it here for a deeper sweep (and bump the Garak
-    # per-layer timeout accordingly).
-    probes = "latentinjection,dan,goodside"
-    out["Garak — full suite"] = run_step(
-        "Garak full vulnerability sweep",
+    # Layer 1 is a BROAD, SHALLOW triage scan: wide category coverage at
+    # minimum depth. Depth — more generations, full datasets, multi-turn —
+    # belongs in Layers 2-3, so here we run a single generation per prompt
+    # (--generations 1) and fire attempts in parallel (--parallel_attempts).
+    #
+    # We sample a few light, representative probes from MANY categories
+    # rather than whole families: several families default to their heaviest
+    # members. Notably the `dan` family's active probes are exactly the big
+    # ones (Ablation_Dan_11_0 ~127 prompts, AutoDANCached, DanInTheWild), so
+    # we name the light single-prompt DAN classics explicitly instead.
+    #
+    # Omitted on purpose: `promptinject`, `realtoxicityprompts`, `leakreplay`
+    # (heaviest / least on-target), and multimodal `audio` / `visual_jailbreak`
+    # (the target is text-only). `xss` became `web_injection` in Garak 0.14.
+    probes = ",".join([
+        # indirect / latent prompt injection — core MCP threat surface
+        "latentinjection.LatentInjectionFactSnippetEiffel",
+        "latentinjection.LatentJailbreak",
+        "latentinjection.LatentWhois",
+        # direct jailbreaks — light single-prompt classics, not the heavy
+        # active dan.* members
+        "dan.Dan_11_0", "dan.AntiDAN", "dan.DUDE",
+        # prompt-injection tricks (all light)
+        "goodside",
+        # terminal / ANSI-escape injection in tool output
+        "ansiescape",
+        # encoded-payload smuggling — representative encodings
+        "encoding.InjectBase64", "encoding.InjectROT13", "encoding.InjectHex",
+        # markdown / web injection & data exfil (formerly `xss`)
+        "web_injection.MarkdownImageExfil", "web_injection.MarkdownXSS",
+        # code / template / SQL injection — tool-execution surface
+        "exploitation",
+        # social-engineering jailbreaks (light)
+        "grandma.Substances", "grandma.Win10",
+        # supply-chain package hallucination
+        "packagehallucination.Python",
+        # malware generation
+        "malwaregen.Payload",
+    ])
+    out["Garak — broad scan"] = run_step(
+        "Garak broad shallow scan",
         f"uv run garak --model_type {cfg.provider} --model_name {cfg.model} "
         f"--probes {probes} "
+        f"--generations 1 --parallel_attempts 8 "
         f"--report_prefix garak_report_l1",
         timeout=_step_timeout("garak"),
     )
@@ -1472,9 +1501,7 @@ def main() -> int:
         f"[bold green]AI Red Team Automation[/bold green]\n"
         f"Target    : {cfg.provider}:{cfg.model}\n"
         f"Layers    : {sorted(selected)}\n"
-        f"Timeout   : {cfg.timeout}s per step (Garak: "
-        f"{max(cfg.timeout, LAYER_TIMEOUTS['garak'])}s, "
-        f"Promptfoo OWASP: "
+        f"Timeout   : {cfg.timeout}s per step (Promptfoo OWASP: "
         f"{max(cfg.timeout, LAYER_TIMEOUTS['promptfoo_owasp'])}s)\n"
         f"MCP target: {mcp_label}",
         title="Start", style="green",
