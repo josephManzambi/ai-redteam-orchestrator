@@ -103,21 +103,34 @@ def test_promptfoo_owasp_config_scope_fits_default_timeout(orchestrator):
     assert len(rt["strategies"]) <= 3
 
 
-def test_garak_default_probe_set_is_focused(orchestrator):
-    """The full probe list timed out — guard the focused default.
+def test_garak_default_probe_set_is_broad_and_shallow(orchestrator):
+    """Layer 1 must stay a broad, shallow scan that fits its timeout.
 
-    Inspect the assignment to `probes`, not the whole function source —
-    explanatory comments in the function body legitimately mention the
-    old probe names that were removed.
+    The full/heavy probe set timed out, so guard the design: many categories
+    (breadth) at depth 1, with the known-heavy probes kept out. Parse only the
+    quoted probe specs inside the `",".join([...])` list so explanatory
+    comments (which may mention old names like `xss`) don't trip the checks.
     """
     import inspect, re
     src = inspect.getsource(orchestrator.layer1_broad_scan)
-    m = re.search(r'probes\s*=\s*"([^"]+)"', src)
-    assert m, "could not find `probes = \"...\"` assignment"
-    probe_str = m.group(1)
-    probes = set(probe_str.split(","))
-    assert "latentinjection" in probes
-    # The probes that were removed/renamed in Garak 0.14 must stay out.
+    block = re.search(r'\.join\(\[(.*?)\]\)', src, re.S)
+    assert block, "could not find the `\",\".join([...])` probe list"
+    probes = set(re.findall(r'"([^"]+)"', block.group(1)))
+    assert probes, "probe list is empty"
+
+    # Breadth: indirect injection stays covered, and many categories are hit.
+    assert any(p.startswith("latentinjection") for p in probes)
+    categories = {p.split(".")[0] for p in probes}
+    assert len(categories) >= 6, f"too few categories for a broad scan: {categories}"
+
+    # Shallow depth: one generation per prompt, attempts parallelized.
+    assert "--generations 1" in src
+    assert "--parallel_attempts" in src
+
+    # The known-heavy probes that blew the timeout must stay out.
+    assert not any("DanInTheWild" in p or "Ablation" in p or "AutoDAN" in p for p in probes)
+    assert "promptinject" not in categories
+    # Families removed/renamed in Garak 0.14 must not appear as bare specs.
     assert "xss" not in probes
     assert "glitch" not in probes
 
