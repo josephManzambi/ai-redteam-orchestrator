@@ -749,6 +749,47 @@ _NONZERO_FAILURE = re.compile(
 )
 
 
+def _mcp_scan_severity(output: str) -> tuple[str, list[str]] | None:
+    """Map mcp-scan's structured JSON report to a (severity, notes) tuple.
+
+    mcp-scan 2.x emits a JSON report with per-tier counts
+    (criticalCount/highCount/mediumCount/lowCount) and per-finding
+    `severity` strings. The text heuristics in `classify` don't match those
+    tokens, so a genuine HIGH finding would otherwise be graded INFO. Parse
+    the counts directly. Returns None when no JSON report can be recovered
+    (so the caller falls back to the text heuristics).
+    """
+    brace = output.find("{")
+    if brace == -1:
+        return None
+    try:
+        report = json.loads(output[brace:])
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(report, dict) or "totalScanned" not in report:
+        return None
+
+    counts = {
+        tier: int(report.get(f"{tier}Count", 0) or 0)
+        for tier in ("critical", "high", "medium", "low")
+    }
+    tier_to_sev = {
+        "critical": "CRITICAL",
+        "high": "HIGH",
+        "medium": "MEDIUM",
+        "low": "INFO",
+    }
+    for tier in ("critical", "high", "medium", "low"):
+        if counts[tier] > 0:
+            severity = tier_to_sev[tier]
+            present = ", ".join(
+                f"{counts[t]} {t}" for t in ("critical", "high", "medium", "low")
+                if counts[t] > 0
+            )
+            return severity, [f"mcp-scan reported findings ({present})."]
+    return "INFO", ["mcp-scan completed with no findings."]
+
+
 def _signal_present(text: str, patterns: tuple[str, ...]) -> bool:
     """True if any pattern occurs as a whole word and is not negated/zeroed.
 
@@ -834,6 +875,15 @@ def classify(step: dict) -> tuple[str, str, list[str]]:
             notes.append("Garak rejected one or more probe names — they may have "
                          "been renamed or removed in the installed version.")
         return status, "NOT_RUN", notes
+
+    # mcp-scan emits a structured JSON report; grade it from its own
+    # severity counts rather than the text heuristics, which don't match
+    # JSON tokens like "highCount".
+    if "mcp-scan" in (step.get("command", "") or ""):
+        parsed = _mcp_scan_severity(output)
+        if parsed is not None:
+            severity, notes = parsed
+            return status, severity, notes
 
     # Genuine completion — apply precise, word-boundary content heuristics.
     severity = "INFO"
