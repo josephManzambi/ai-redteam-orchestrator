@@ -1,6 +1,6 @@
 # 🛡️ AI Red Team Orchestrator
 
-A single-file, three-layer automated red-team pipeline for auditing LLMs and MCP tool servers. Its three-layer structure follows the Garak → Promptfoo → PyRIT layering described by [Amine Raji](https://aminrj.com/posts/attack-patterns-red-teaming/); the layer concept and tool mapping are his, while the orchestration, severity classification, reporting, timeout/exit-code/CI design, and probe and preset selection are this project's own. Runs entirely locally against [Ollama](https://ollama.com), using [`uv`](https://docs.astral.sh/uv/) for zero-config dependency management.
+A single-file, three-layer automated red-team pipeline for auditing LLMs and MCP tool servers. Its three-layer structure follows the Garak → Promptfoo → PyRIT layering described by [Amine Raji](https://aminrj.com/posts/attack-patterns-red-teaming/); the layer concept and tool mapping are his, while the orchestration, severity classification, reporting, timeout/exit-code/CI design, probe and preset selection are this project's own. Runs entirely locally against [Ollama](https://ollama.com), using [`uv`](https://docs.astral.sh/uv/) for zero-config dependency management.
 
 Point it at your own MCP server and the orchestrator throws four industry-standard attack frameworks at it:
 
