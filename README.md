@@ -1,6 +1,6 @@
 # 🛡️ AI Red Team Orchestrator
 
-A single-file, three-layer automated red-team pipeline for auditing LLMs and MCP tool servers, implementing layers 1–3 of the methodology proposed by [Amine Raji](https://aminrj.com/posts/attack-patterns-red-teaming/). Runs entirely locally against [Ollama](https://ollama.com), using [`uv`](https://docs.astral.sh/uv/) for zero-config dependency management.
+A single-file, three-layer automated red-team pipeline for auditing LLMs and MCP tool servers. Its three-layer structure follows the Garak → Promptfoo → PyRIT layering described by [Amine Raji](https://aminrj.com/posts/attack-patterns-red-teaming/); the layer concept and tool mapping are his, while the orchestration, severity classification, reporting, timeout/exit-code/CI design, and probe and preset selection are this project's own. Runs entirely locally against [Ollama](https://ollama.com), using [`uv`](https://docs.astral.sh/uv/) for zero-config dependency management.
 
 Point it at your own MCP server and the orchestrator throws four industry-standard attack frameworks at it:
 
@@ -363,13 +363,20 @@ This tool is for **authorized security testing only**. The optional demo MCP ser
 
 ## Acknowledgments
 
-The three-layer structure of this orchestrator (Broad Scan → Targeted →
-Adversarial) follows the layered red-teaming methodology proposed by
-Amine Raji in [LLM Red Teaming Tools: PyRIT & Garak (2025
+The layered Garak → Promptfoo → PyRIT structure of this orchestrator
+follows the red-teaming methodology described by Amine Raji in [LLM Red
+Teaming Tools: PyRIT & Garak (2025
 Guide)](https://aminrj.com/posts/attack-patterns-red-teaming/), which
-maps the four-layer testing strategy across Garak, Promptfoo, and PyRIT.
-This project implements layers 1-3 as a single-file, CI-friendly
-artifact; layer 4 (manual expert testing) is intentionally outside its
+maps a four-layer testing strategy across those tools. That layer concept
+and tool mapping are his.
+
+Everything else here is this project's own: the single-file orchestration
+and layer sequencing, the severity classifier, the Markdown/HTML report
+generator, the per-layer timeout overrides, the CI exit-code gating, the
+cleanup tiers and CLI, and the specific Garak probes, Promptfoo plugins,
+and PyRIT objectives each layer runs (which differ from the article's
+examples — e.g. it uses the `owasp:llm` plugin set rather than the OWASP
+Agentic preset). Layer 4 (manual expert testing) is intentionally out of
 scope, since no orchestrator replaces a human who has read your codebase.
 
 Read his article first if you want the threat-model framework, the
