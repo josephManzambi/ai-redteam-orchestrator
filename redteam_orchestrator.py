@@ -24,8 +24,11 @@ AI Red Team Orchestrator
 Three-layer automated red-team pipeline against a local LLM target with a
 deliberately vulnerable MCP server as the system-tool surface.
 
-Implements layers 1–3 of the layered red-teaming methodology proposed by
-Amine Raji: https://aminrj.com/posts/attack-patterns-red-teaming/
+Its three-layer structure follows the Garak → Promptfoo → PyRIT layering
+described by Amine Raji (https://aminrj.com/posts/attack-patterns-red-teaming/);
+the layer concept and tool mapping are his. The orchestration, classifier,
+reporting, timeouts, CI exit-code gating, and the specific probes/presets
+each layer runs are this project's own.
 
   Layer 1 — Broad Scan  : Garak (full suite) + Promptfoo (broad eval)
   Layer 2 — Targeted    : Promptfoo OWASP LLM Top-10 preset + mcp-scan
