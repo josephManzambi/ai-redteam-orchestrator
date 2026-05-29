@@ -197,6 +197,44 @@ The orchestrator **always runs all selected layers to completion** and writes th
   # Step fails on HIGH/CRITICAL — full report is always available as artifact
 ```
 
+## OWASP Coverage Mapping
+
+How this tool's layers map onto two OWASP taxonomies. Coverage is deliberately conservative — a light, single-agent / single-server red-team tool, not an exhaustive audit.
+
+Levels: 🟢 Direct · 🟡 Partial · 🔵 Indirect · ⬜ Not covered
+
+### OWASP MCP Top 10
+
+| ID | Risk | Coverage | Provided by |
+|---|---|---|---|
+| MCP01 | Token Mismanagement & Secret Exposure | 🔵 Indirect | mcp-scan flags high-entropy strings in tool arguments _(static heuristic only; no token lifecycle/rotation testing)_ |
+| MCP02 | Excessive Permissions & Privilege Escalation | 🟡 Partial | mcp-scan flags risky capability combos (e.g. filesystem + network = exfiltration vector) _(static; no runtime privilege-escalation testing)_ |
+| MCP03 | Tool Poisoning | 🟡 Partial | mcp-scan static audit of tool descriptors for injection/poisoning patterns _(descriptor-level only; no behavioural detection)_ |
+| MCP04 | Software Supply Chain & Dependency Tampering | ⬜ Not covered | _Garak packagehallucination is model-layer, not MCP dependency tampering_ |
+| MCP05 | Command Injection | 🟢 Direct | Promptfoo eval (whoami, '; id'), Garak exploitation, PyRIT objectives coercing system_diagnostics '; cat /etc/passwd' |
+| MCP06 | Context Over-sharing | ⬜ Not covered | — |
+| MCP07 | Insufficient Authentication & Authorization | ⬜ Not covered | _operator/deployment control; not exercised_ |
+| MCP08 | Audit & Logging Gaps | ⬜ Not covered | — |
+| MCP09 | Shadow MCP Servers | ⬜ Not covered | _requires registry/discovery testing_ |
+| MCP10 | Model Misbinding & Context Spoofing | 🟡 Partial | Garak latentinjection (single-hop indirect/context injection) _(no model-binding or covert-channel testing)_ |
+
+### OWASP LLM Top 10 (2025)
+
+| ID | Risk | Coverage | Provided by |
+|---|---|---|---|
+| LLM01 | Prompt Injection | 🟢 Direct | Garak goodside + latentinjection, Promptfoo 'ignore previous instructions' case, Promptfoo OWASP prompt-injection strategy |
+| LLM02 | Sensitive Information Disclosure | 🟡 Partial | Promptfoo path traversal ('/etc/passwd') + system-prompt extraction; PyRIT exfiltration objectives |
+| LLM03 | Supply Chain | ⬜ Not covered | _Garak packagehallucination is adjacent (model-layer), not LLM supply-chain_ |
+| LLM04 | Data and Model Poisoning | ⬜ Not covered | — |
+| LLM05 | Improper Output Handling | 🟡 Partial | Garak ansiescape + web_injection.MarkdownImageExfil / MarkdownXSS (unsafe/structured output) |
+| LLM06 | Excessive Agency | 🟡 Partial | PyRIT tool-coercion; Promptfoo OWASP excessive-agency plugin _(OWASP plugin skipped unless 'promptfoo auth login')_ |
+| LLM07 | System Prompt Leakage | 🟢 Direct | Promptfoo system-prompt extraction case; Promptfoo OWASP prompt-extraction plugin |
+| LLM08 | Vector and Embedding Weaknesses | ⬜ Not covered | — |
+| LLM09 | Misinformation | 🔵 Indirect | Garak packagehallucination (hallucinated package names) _(narrow slice of the misinformation class)_ |
+| LLM10 | Unbounded Consumption | ⬜ Not covered | — |
+
+**OWASP Agentic (ASI01–ASI10): intentionally not scored.** This is a single-agent, single-server tool, so the genuinely multi-agent ASI risks — ASI07 Insecure Inter-Agent Communication, ASI08 Cascading Failures, ASI10 Rogue Agents — are structurally out of scope. The single-agent-flavoured ASI risks it does touch (ASI01 Goal Hijack, ASI02 Tool Misuse, ASI05 Unexpected Code Execution, ASI06 Memory & Context Poisoning) are already reflected in the LLM and MCP tables above.
+
 ## Auditing Your Own MCP Server
 
 Create a client config JSON in the [Claude Desktop / Cursor format](https://modelcontextprotocol.io/docs/tools/inspector):
