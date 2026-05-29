@@ -1121,6 +1121,195 @@ def _md_section(f, title: str, step: dict) -> None:
     f.write("\n</details>\n\n")
 
 
+# ---------- OWASP coverage mapping ----------
+# Single source of truth for how this tool's layers map onto two OWASP
+# taxonomies. Both the README table and the generated report render from
+# these dicts, so they cannot drift (a test pins the README copy to the
+# renderer output).
+#
+# Coverage is deliberately conservative: this is a light, single-agent /
+# single-server red-team tool, not an exhaustive audit. Most rows are
+# Partial or Not covered, and that honesty is the point.
+#
+# level ∈ {"Direct", "Partial", "Indirect", "Not covered"}
+OWASP_COVERAGE_LEVELS = ("Direct", "Partial", "Indirect", "Not covered")
+
+OWASP_MCP_TOP10 = {
+    "MCP01": {"title": "Token Mismanagement & Secret Exposure",
+              "level": "Indirect",
+              "by": "mcp-scan flags high-entropy strings in tool arguments",
+              "note": "static heuristic only; no token lifecycle/rotation testing"},
+    "MCP02": {"title": "Excessive Permissions & Privilege Escalation",
+              "level": "Partial",
+              "by": "mcp-scan flags risky capability combos (e.g. filesystem + network = exfiltration vector)",
+              "note": "static; no runtime privilege-escalation testing"},
+    "MCP03": {"title": "Tool Poisoning",
+              "level": "Partial",
+              "by": "mcp-scan static audit of tool descriptors for injection/poisoning patterns",
+              "note": "descriptor-level only; no behavioural detection"},
+    "MCP04": {"title": "Software Supply Chain & Dependency Tampering",
+              "level": "Not covered",
+              "by": "",
+              "note": "Garak packagehallucination is model-layer, not MCP dependency tampering"},
+    "MCP05": {"title": "Command Injection",
+              "level": "Direct",
+              "by": "Promptfoo eval (whoami, '; id'), Garak exploitation, PyRIT objectives coercing system_diagnostics '; cat /etc/passwd'",
+              "note": ""},
+    "MCP06": {"title": "Context Over-sharing",
+              "level": "Not covered",
+              "by": "",
+              "note": ""},
+    "MCP07": {"title": "Insufficient Authentication & Authorization",
+              "level": "Not covered",
+              "by": "",
+              "note": "operator/deployment control; not exercised"},
+    "MCP08": {"title": "Audit & Logging Gaps",
+              "level": "Not covered",
+              "by": "",
+              "note": ""},
+    "MCP09": {"title": "Shadow MCP Servers",
+              "level": "Not covered",
+              "by": "",
+              "note": "requires registry/discovery testing"},
+    "MCP10": {"title": "Model Misbinding & Context Spoofing",
+              "level": "Partial",
+              "by": "Garak latentinjection (single-hop indirect/context injection)",
+              "note": "no model-binding or covert-channel testing"},
+}
+
+OWASP_LLM_TOP10 = {
+    "LLM01": {"title": "Prompt Injection",
+              "level": "Direct",
+              "by": "Garak goodside + latentinjection, Promptfoo 'ignore previous instructions' case, Promptfoo OWASP prompt-injection strategy",
+              "note": ""},
+    "LLM02": {"title": "Sensitive Information Disclosure",
+              "level": "Partial",
+              "by": "Promptfoo path traversal ('/etc/passwd') + system-prompt extraction; PyRIT exfiltration objectives",
+              "note": ""},
+    "LLM03": {"title": "Supply Chain",
+              "level": "Not covered",
+              "by": "",
+              "note": "Garak packagehallucination is adjacent (model-layer), not LLM supply-chain"},
+    "LLM04": {"title": "Data and Model Poisoning",
+              "level": "Not covered",
+              "by": "",
+              "note": ""},
+    "LLM05": {"title": "Improper Output Handling",
+              "level": "Partial",
+              "by": "Garak ansiescape + web_injection.MarkdownImageExfil / MarkdownXSS (unsafe/structured output)",
+              "note": ""},
+    "LLM06": {"title": "Excessive Agency",
+              "level": "Partial",
+              "by": "PyRIT tool-coercion; Promptfoo OWASP excessive-agency plugin",
+              "note": "OWASP plugin skipped unless 'promptfoo auth login'"},
+    "LLM07": {"title": "System Prompt Leakage",
+              "level": "Direct",
+              "by": "Promptfoo system-prompt extraction case; Promptfoo OWASP prompt-extraction plugin",
+              "note": ""},
+    "LLM08": {"title": "Vector and Embedding Weaknesses",
+              "level": "Not covered",
+              "by": "",
+              "note": ""},
+    "LLM09": {"title": "Misinformation",
+              "level": "Indirect",
+              "by": "Garak packagehallucination (hallucinated package names)",
+              "note": "narrow slice of the misinformation class"},
+    "LLM10": {"title": "Unbounded Consumption",
+              "level": "Not covered",
+              "by": "",
+              "note": ""},
+}
+
+OWASP_TAXONOMIES = (
+    ("OWASP MCP Top 10", OWASP_MCP_TOP10),
+    ("OWASP LLM Top 10 (2025)", OWASP_LLM_TOP10),
+)
+
+OWASP_AGENTIC_NOTE = (
+    "**OWASP Agentic (ASI01–ASI10): intentionally not scored.** This is a "
+    "single-agent, single-server tool, so the genuinely multi-agent ASI risks "
+    "— ASI07 Insecure Inter-Agent Communication, ASI08 Cascading Failures, "
+    "ASI10 Rogue Agents — are structurally out of scope. The single-agent-"
+    "flavoured ASI risks it does touch (ASI01 Goal Hijack, ASI02 Tool Misuse, "
+    "ASI05 Unexpected Code Execution, ASI06 Memory & Context Poisoning) are "
+    "already reflected in the LLM and MCP tables above."
+)
+
+_OWASP_LEVEL_EMOJI = {
+    "Direct": "🟢", "Partial": "🟡", "Indirect": "🔵", "Not covered": "⬜",
+}
+_OWASP_LEVEL_COLOR = {
+    "Direct": "#16a34a", "Partial": "#ca8a04", "Indirect": "#2563eb", "Not covered": "#64748b",
+}
+
+
+def _owasp_provided_by(entry: dict, *, html: bool = False) -> str:
+    """Format the 'provided by' cell, folding in the parenthetical note."""
+    esc = html_module.escape if html else (lambda s: s)
+    by = esc(entry["by"]) if entry["by"] else ""
+    note = esc(entry["note"]) if entry["note"] else ""
+    if by and note:
+        return f"{by} <em>({note})</em>" if html else f"{by} _({note})_"
+    if note:
+        return f"<em>{note}</em>" if html else f"_{note}_"
+    return by or "—"
+
+
+def render_owasp_coverage_md() -> str:
+    """Render the OWASP coverage mapping as a Markdown section.
+
+    Used both for the report and (verbatim) for the README; a test pins the
+    README copy to this output so the two cannot drift.
+    """
+    lines = [
+        "## OWASP Coverage Mapping",
+        "",
+        "How this tool's layers map onto two OWASP taxonomies. Coverage is "
+        "deliberately conservative — a light, single-agent / single-server "
+        "red-team tool, not an exhaustive audit.",
+        "",
+        "Levels: 🟢 Direct · 🟡 Partial · 🔵 Indirect · ⬜ Not covered",
+        "",
+    ]
+    for heading, table in OWASP_TAXONOMIES:
+        lines.append(f"### {heading}")
+        lines.append("")
+        lines.append("| ID | Risk | Coverage | Provided by |")
+        lines.append("|---|---|---|---|")
+        for rid, entry in table.items():
+            level = f"{_OWASP_LEVEL_EMOJI[entry['level']]} {entry['level']}"
+            lines.append(f"| {rid} | {entry['title']} | {level} | {_owasp_provided_by(entry)} |")
+        lines.append("")
+    lines.append(OWASP_AGENTIC_NOTE)
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_owasp_coverage_html() -> str:
+    """Render the OWASP coverage mapping as an HTML section for the report."""
+    esc = html_module.escape
+    out = [
+        "<h2>OWASP Coverage Mapping</h2>",
+        "<p class='step-meta'>Conservative by design — a light, single-agent / "
+        "single-server red-team tool, not an exhaustive audit.</p>",
+    ]
+    for heading, table in OWASP_TAXONOMIES:
+        out.append(f"<h3>{esc(heading)}</h3>")
+        out.append("<table>")
+        out.append("<tr><th>ID</th><th>Risk</th><th>Coverage</th><th>Provided by</th></tr>")
+        for rid, entry in table.items():
+            color = _OWASP_LEVEL_COLOR[entry["level"]]
+            out.append(
+                f"<tr><td>{esc(rid)}</td><td>{esc(entry['title'])}</td>"
+                f"<td><span class='badge' style='background:{color}'>{esc(entry['level'])}</span></td>"
+                f"<td>{_owasp_provided_by(entry, html=True)}</td></tr>"
+            )
+        out.append("</table>")
+    note_plain = OWASP_AGENTIC_NOTE.replace("**", "")
+    out.append(f"<p>{esc(note_plain)}</p>")
+    return "\n".join(out)
+
+
 def write_report_md(layers: dict[str, dict[str, dict]], versions: dict | None = None) -> None:
     meta = _report_header(versions)
     rows = _summary_rows(layers)
@@ -1143,6 +1332,8 @@ def write_report_md(layers: dict[str, dict[str, dict]], versions: dict | None = 
             f.write(f"## {layer_name}\n\n")
             for step_name, step in steps.items():
                 _md_section(f, step_name, step)
+        f.write(render_owasp_coverage_md())
+        f.write("\n")
         f.write("## Recommendations\n\n")
         for i, (title, body) in enumerate(_recommendations(layers), 1):
             # Strip HTML tags for markdown output.
@@ -1313,6 +1504,9 @@ def write_report_html(layers: dict[str, dict[str, dict]], versions: dict | None 
             if len(content) > 12000:
                 parts.append(f"<p><em>Truncated. Full length: {len(content):,} chars.</em></p>\n")
             parts.append("</details>\n")
+
+    # OWASP coverage mapping.
+    parts.append(render_owasp_coverage_html() + "\n")
 
     # Recommendations (derived).
     parts.append("<h2>Recommendations</h2>\n<div class='recs'><ol>\n")
