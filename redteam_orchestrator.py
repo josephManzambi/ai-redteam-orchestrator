@@ -278,6 +278,10 @@ def _ollama_target():
         model_name="{cfg.model}",
         endpoint=OLLAMA_ENDPOINT,
         api_key="ollama",  # Ollama ignores it but PyRIT requires a non-empty value
+        # PyRIT's httpx default is only 60s. A single laptop generation over a
+        # long accumulated conversation can exceed that and raise
+        # httpx.ReadTimeout (the failure that errored the Crescendo run).
+        httpx_client_kwargs={{"timeout": 180}},
     )
 
 async def main():
@@ -331,6 +335,10 @@ def _ollama_target():
         model_name="{cfg.model}",
         endpoint=OLLAMA_ENDPOINT,
         api_key="ollama",  # Ollama ignores it but PyRIT requires a non-empty value
+        # PyRIT's httpx default is only 60s. A single laptop generation over a
+        # long accumulated conversation can exceed that and raise
+        # httpx.ReadTimeout (the failure that errored the Crescendo run).
+        httpx_client_kwargs={{"timeout": 180}},
     )
 
 async def main():
