@@ -348,7 +348,7 @@ async def main():
     scorer_target = _ollama_target()
 
     # Tree shape tuned for a laptop Ollama target: ~24 model calls total
-    # (width*depth*branching*3) which fits in a few minutes on qwen2.5:7b.
+    # (width*depth*branching*3) which fits in a few minutes on qwen2.5:3b.
     # Pruning and escalation are still meaningful at 2/2/2; on-topic checking
     # is disabled because it adds an extra LLM call per node for marginal
     # signal at this tree size.
