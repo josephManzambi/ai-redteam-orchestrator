@@ -149,6 +149,32 @@ scripts talk to Ollama through its OpenAI-compatible endpoint at
 `http://localhost:11434/v1` via `OpenAIChatTarget`. Both behaviors are
 pinned by `tests/test_generated_artifacts.py`.
 
+#### Strengthening Layer 3
+
+Layer 3 is weakest when the same small model acts as the target, attacker, and
+judge (see [#27](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/27)).
+Generation and recognition are asymmetric: a model that struggles to invent a
+good jailbreak may still recognize whether another model's attempt succeeded.
+For a cheap de-biasing pass, use a different-family 7-8B model as the PyRIT
+adversary and scorer, for example `llama3.1:8b` against the default
+`qwen2.5:3b` target.
+
+```bash
+ollama pull qwen2.5:3b
+ollama pull llama3.1:8b
+OLLAMA_MAX_LOADED_MODELS=2 ollama serve
+uv run redteam_orchestrator.py --target qwen2.5:3b --layers 3 --timeout 7200
+```
+
+Until the orchestrator has a first-class `--judge-model` flag, run Layer 3 once
+to generate `attack_pyrit_crescendo.py` and `attack_pyrit_tap.py`, then edit the
+generated PyRIT scripts so `adversarial_chat` and `scoring_target` use
+`model_name="llama3.1:8b"` while `objective_target` keeps the audited target
+model. Keeping both models resident with `OLLAMA_MAX_LOADED_MODELS=2` avoids
+model reload churn during the multi-turn PyRIT runs. This costs roughly one
+extra 7-8B model download and a few minutes, but it reduces the self-play bias
+behind a falsely reassuring "clean" Layer 3 result.
+
 ### Per-step timeouts
 
 Not every step is equally expensive. mcp-scan and Promptfoo's broad eval
