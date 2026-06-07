@@ -12,6 +12,14 @@ Point it at your own MCP server and the orchestrator throws four industry-standa
 
 Output is a Markdown report (and optionally a self-contained HTML report) with severity badges, an executive summary table, raw tool output in collapsible sections, and recommendations derived from what the run actually found.
 
+> **A literacy on-ramp and an honest CI smoke test for local AI red-teaming — explicitly _not_ a compliance or assurance instrument.**
+
+### Who this is for
+
+**For you if** you want to learn local AI red-teaming hands-on · you want a fast CI gate on the safety plumbing of small, deployable models · you want honest, private, repeatable smoke tests you own end-to-end.
+
+**Not the right tool if** you need a compliance/assurance *verdict* · you're auditing a frontier model · you need multi-agent or runtime-MCP coverage. Those boundaries are tracked openly — see [Known Limitations](#known-limitations).
+
 ## Why?
 
 Most red-team workflows require stitching together 3–4 tools manually, each with their own config format, Python version, and install dance. This script:
@@ -97,6 +105,20 @@ options:
   --yes, -y                  Skip confirmation prompt for --clean-all
 ```
 
+## How it works: the three roles
+
+Automated red-teaming is an adversarial game with three roles:
+
+- **Target** (the *defender*) — the model under test; its job is to resist.
+- **Attacker** — generates the attacks (crafting prompts, escalating, hunting for a bypass). Its job is **generation**.
+- **Judge** (or *scorer*) — decides whether an attack landed: did the target comply, leak, or refuse? Its job is **recognition**.
+
+A human red-teamer is all three at once; automation splits them so the loop can run thousands of times unattended — which is what lets them be *different* models. Generating a good attack is much harder than recognizing a successful one, so a small model makes a passable judge but a poor attacker.
+
+Each role spans a spectrum — attackers from a fixed corpus of known attacks → a single-turn generator → an adaptive multi-turn agent; judges from a keyword rule → an LLM-as-judge → a human. And the roles can be *wired* as **self-play** (one model in every role — cheap, but a weak adversary and a biased judge), **separate models**, or **stronger-attacker**.
+
+**Where this tool sits:** Garak is a static-corpus attacker graded by rules; Promptfoo generates single-turn attacks graded by a mix of rules and an LLM rubric; PyRIT (Crescendo, TAP) is an adaptive multi-turn attacker with an LLM judge. All three default to **self-play** — the same `--target` model plays every role — which is the single biggest caveat on Layer 3 results ([why](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/27)).
+
 ## What It Does
 
 ### Layer 1 — Broad Scan
@@ -152,26 +174,24 @@ pinned by `tests/test_generated_artifacts.py`.
 ### Per-step timeouts
 
 Not every step is equally expensive. mcp-scan and Promptfoo's broad eval
-finish in seconds; Garak's `promptinject` family and Promptfoo's redteam
-preset can take an hour or more on a laptop 7B. To stop the slow steps
-from getting killed at the global ceiling while the fast steps don't need
-the headroom, the orchestrator uses per-layer timeout overrides:
+finish in seconds; only Promptfoo's OWASP redteam preset can take an hour
+or more on a laptop 7B. So that one step gets a larger per-layer timeout
+budget, while every other step (Garak included) uses the global ceiling:
 
 | Step                          | Timeout (seconds) |
 |-------------------------------|-------------------|
-| Garak full vulnerability sweep| 14400 (4h)        |
+| Garak broad scan              | 3600 (uses `--timeout`) |
 | Promptfoo broad evaluation    | 3600 (uses `--timeout`) |
-| Promptfoo OWASP redteam preset| 7200 (2h)         |
+| Promptfoo OWASP redteam preset| 7200 (2h, per-layer override) |
 | mcp-scan static audit         | 3600 (uses `--timeout`) |
 | PyRIT Crescendo               | 3600 (uses `--timeout`) |
 | PyRIT Tree of Attacks         | 3600 (uses `--timeout`) |
 
-`--timeout N` raises the global ceiling for steps that don't have a
-per-layer override, and also raises the per-layer overrides if `N` is
-larger than the default for that step. So `--timeout 21600` will give
-Garak 6h and Promptfoo OWASP 6h. Lowering `--timeout` below the
-per-layer default does not lower the per-layer override — slow steps
-always get at least their default.
+`--timeout N` raises the global ceiling for every step without a per-layer
+override (Garak included), and also raises the OWASP override if `N` is
+larger than 7200. So `--timeout 21600` gives Garak and Promptfoo OWASP 6h
+each. Lowering `--timeout` below 7200 does not lower the OWASP override —
+it always gets at least its default.
 
 ### Reports
 
@@ -216,7 +236,7 @@ Levels: 🟢 Direct · 🟡 Partial · 🔵 Indirect · ⬜ Not covered
 | MCP07 | Insufficient Authentication & Authorization | ⬜ Not covered | _operator/deployment control; not exercised_ |
 | MCP08 | Audit & Logging Gaps | ⬜ Not covered | — |
 | MCP09 | Shadow MCP Servers | ⬜ Not covered | _requires registry/discovery testing_ |
-| MCP10 | Model Misbinding & Context Spoofing | 🟡 Partial | Garak latentinjection (single-hop indirect/context injection) _(no model-binding or covert-channel testing)_ |
+| MCP10 | Context Injection & Over-Sharing | 🟡 Partial | Garak latentinjection (single-hop indirect/context injection) _(no covert-channel testing)_ |
 
 ### OWASP LLM Top 10 (2025)
 
@@ -374,26 +394,22 @@ Likely Promptfoo's generation phase is trying to reach OpenAI instead of Ollama.
 
 ## Known Limitations
 
-- **The same model is used as target, attacker, and scorer.** In Layer 3 the
-  generated PyRIT scripts wire one Ollama model into all three roles —
-  `objective_target`, `adversarial_chat`, and `scoring_target` (see
-  `_ollama_target()` in `_pyrit_crescendo_script()` and
-  `_pyrit_tap_script()`). A small local model is a weak adversary *and* a
-  self-biased judge, which materially weakens the adversarial layer: it may
-  miss attacks a stronger attacker would find, and may grade its own
-  borderline successes as refusals. Treat a "clean" Layer 3 result as
-  low-confidence. For a real assessment, point the adversarial and scoring
-  targets at a stronger, separate model.
-- **Severity classification is heuristic.** `classify()` derives severity
-  from word-boundary keyword matches in tool output. It is precise enough to
-  avoid the obvious false positives ("0 failures", probe names containing
-  "exploit"), but it can still miss novel phrasings — it is not a substitute
-  for reading the raw output captured in the report.
-- **Scope is trimmed for laptop-grade targets.** The default Garak probe set,
-  the Promptfoo OWASP plugin/strategy bundle, and the TAP tree size are all
-  reduced so a run completes on a laptop Ollama target. A serious audit should
-  widen them (see the per-layer notes above) and raise the timeouts.
-- **Layer 4 (manual expert testing) is out of scope** — see Acknowledgments.
+This project is deliberately scoped, and its limitations are tracked
+transparently as GitHub issues — start with the pinned
+[🗺️ Roadmap & Known Limitations](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/38).
+Each issue explains why the boundary exists, what it means for your results,
+and what would change it.
+
+- [The same small model is target, attacker, and judge (self-play)](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/27) — the biggest caveat on Layer 3 results
+- [A "clean" run is a smoke test, not an assessment](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/28)
+- [Severity classification is heuristic (false-negative risk)](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/29)
+- [Scope is trimmed for laptop-grade targets](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/30)
+- [Promptfoo OWASP generation is cloud-gated](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/31)
+- [Robustness is coupled to the tuned model](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/32) (Crescendo / llama3.2:3b)
+- [Toolchain version-drift is load-bearing](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/33)
+- [Multi-agent / runtime-MCP risks are out of scope](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/34) (by design)
+
+Manual expert testing ("Layer 4") is out of scope — see [Acknowledgments](#acknowledgments).
 
 ## Disclaimer
 
