@@ -236,7 +236,7 @@ Levels: 🟢 Direct · 🟡 Partial · 🔵 Indirect · ⬜ Not covered
 | MCP07 | Insufficient Authentication & Authorization | ⬜ Not covered | _operator/deployment control; not exercised_ |
 | MCP08 | Audit & Logging Gaps | ⬜ Not covered | — |
 | MCP09 | Shadow MCP Servers | ⬜ Not covered | _requires registry/discovery testing_ |
-| MCP10 | Context Injection & Over-Sharing | 🟡 Partial | Garak latentinjection (single-hop indirect/context injection) _(no covert-channel testing)_ |
+| MCP10 | Context Injection & Over-Sharing | 🟡 Partial | Garak latentinjection (single-hop indirect/context injection) _(no model-binding or covert-channel testing)_ |
 
 ### OWASP LLM Top 10 (2025)
 

@@ -1179,7 +1179,7 @@ OWASP_MCP_TOP10 = {
               "level": "Not covered",
               "by": "",
               "note": "requires registry/discovery testing"},
-    "MCP10": {"title": "Model Misbinding & Context Spoofing",
+    "MCP10": {"title": "Context Injection & Over-Sharing",
               "level": "Partial",
               "by": "Garak latentinjection (single-hop indirect/context injection)",
               "note": "no model-binding or covert-channel testing"},
