@@ -22,3 +22,13 @@ garak.log
 garak_report*
 .promptfoo*
 redteam-output*
+
+# Judge-calibration / eval RUN OUTPUTS (the eval_adjudicator.py harness is tracked; its outputs are not)
+adjudicator_eval_*
+firmup.*
+live_eval.*
+report_qwen.md
+report_llama.md
+report_live_qwen.md
+eval_night.log
+live_audit.log

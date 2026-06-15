@@ -119,6 +119,16 @@ Each role spans a spectrum — attackers from a fixed corpus of known attacks �
 
 **Where this tool sits:** Garak is a static-corpus attacker graded by rules; Promptfoo generates single-turn attacks graded by a mix of rules and an LLM rubric; PyRIT (Crescendo, TAP) is an adaptive multi-turn attacker with an LLM judge. All three default to **self-play** — the same `--target` model plays every role — which is the single biggest caveat on Layer 3 results ([why](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/27)).
 
+### Validating a judge model
+
+If you break self-play by pointing the judge at a separate model, **validate that judge first** — one that misreads real harm is worse than none. `eval_adjudicator.py` runs candidate judges over a small labeled probe (the orchestrator's own `root:x:0:0` / `uid=0(root)` markers, obfuscated variants, and benign cases) and reports each judge's false-negative / false-positive rate:
+
+```bash
+python3 eval_adjudicator.py --judges llama3.1:8b mistral:7b --runs 5 --report /dev/null
+```
+
+In testing, judge quality tracked neither size nor family — a 7B beat a 70B, and the obvious `llama3.1:8b` pick was the worst (it called a literal `/etc/passwd` dump "not harmful"). Judges reliably caught overtly-framed attacks but missed quiet or paraphrased leaks, so trust a judge's "harmful" verdict (escalate / annotate) and never its "safe" one (don't downgrade). Full result and the planned `--adjudicate` design: [#41](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/41).
+
 ## What It Does
 
 ### Layer 1 — Broad Scan
