@@ -18,18 +18,26 @@ def _step(
     }
 
 
-def _mcp_scan_output(critical=0, high=0, medium=0, low=0) -> str:
+def _descriptor_report(critical=0, high=0, medium=0, low=0, failed=None) -> str:
+    """A descriptor-scan report JSON like the one the orchestrator stores."""
     import json as _json
     report = {
-        "results": [],
-        "totalScanned": 1,
+        "scanner": "mcp-descriptor-scan",
+        "version": "1.0",
+        "totalServers": 1,
+        "totalTools": 1,
+        "servers": [
+            {"name": n, "status": "error", "error": "boom", "toolCount": 0}
+            for n in (failed or [])
+        ] or [{"name": "s", "status": "ok", "error": None, "toolCount": 1}],
+        "findings": [],
         "criticalCount": critical,
         "highCount": high,
         "mediumCount": medium,
         "lowCount": low,
         "infoCount": 0,
     }
-    return f"[mcp-scan: findings produced (rc=1)]\n{_json.dumps(report)}"
+    return _json.dumps(report)
 
 
 def test_completed_with_passwd_leak_is_critical(orchestrator):
@@ -170,47 +178,55 @@ def test_critical_marker_outranks_failure_count(orchestrator):
     assert sev == "CRITICAL"
 
 
-# ---- mcp-scan: structured JSON severity counts drive the grade ----
-def test_mcp_scan_high_count_is_high(orchestrator):
-    # Regression: a HIGH mcp-scan finding was previously graded INFO because
-    # the text heuristics don't match JSON tokens like "highCount".
-    s = _step(
-        output=_mcp_scan_output(high=1, medium=2),
-        command="npx -y mcp-scan@latest scan -c mcp_scan_client.json --json",
-    )
+# ---- MCP descriptor scan: structured JSON severity counts drive the grade ----
+_SCAN_CMD = "uv run mcp_descriptor_scan.py mcp_scan_client.json"
+
+
+def test_descriptor_scan_high_count_is_high(orchestrator):
+    # Regression: a HIGH finding was previously graded INFO because the text
+    # heuristics don't match JSON tokens like "highCount".
+    s = _step(output=_descriptor_report(high=1, medium=2), command=_SCAN_CMD)
     status, sev, notes = orchestrator.classify(s)
     assert status == "completed"
     assert sev == "HIGH"
-    assert any("mcp-scan reported findings" in n for n in notes)
+    assert any("descriptor scan reported findings" in n.lower() for n in notes)
 
 
-def test_mcp_scan_critical_count_is_critical(orchestrator):
-    s = _step(output=_mcp_scan_output(critical=1, high=3), command="mcp-scan scan")
+def test_descriptor_scan_critical_count_is_critical(orchestrator):
+    s = _step(output=_descriptor_report(critical=1, high=3), command=_SCAN_CMD)
     _, sev, _ = orchestrator.classify(s)
     assert sev == "CRITICAL"
 
 
-def test_mcp_scan_medium_count_is_medium(orchestrator):
-    s = _step(output=_mcp_scan_output(medium=2), command="mcp-scan scan")
+def test_descriptor_scan_medium_count_is_medium(orchestrator):
+    s = _step(output=_descriptor_report(medium=2), command=_SCAN_CMD)
     _, sev, _ = orchestrator.classify(s)
     assert sev == "MEDIUM"
 
 
-def test_mcp_scan_low_only_is_info(orchestrator):
-    s = _step(output=_mcp_scan_output(low=3), command="mcp-scan scan")
+def test_descriptor_scan_low_only_is_info(orchestrator):
+    s = _step(output=_descriptor_report(low=3), command=_SCAN_CMD)
     _, sev, _ = orchestrator.classify(s)
     assert sev == "INFO"
 
 
-def test_mcp_scan_no_findings_is_info(orchestrator):
-    s = _step(output=_mcp_scan_output(), command="mcp-scan scan")
+def test_descriptor_scan_no_findings_is_info(orchestrator):
+    s = _step(output=_descriptor_report(), command=_SCAN_CMD)
     _, sev, notes = orchestrator.classify(s)
     assert sev == "INFO"
     assert any("no findings" in n.lower() for n in notes)
 
 
-def test_mcp_scan_unparseable_falls_back_to_text(orchestrator):
+def test_descriptor_scan_failed_server_is_info_with_note(orchestrator):
+    # A server that could not be introspected is called out, not graded clean.
+    s = _step(output=_descriptor_report(failed=["broken-server"]), command=_SCAN_CMD)
+    _, sev, notes = orchestrator.classify(s)
+    assert sev == "INFO"
+    assert any("could not introspect" in n.lower() for n in notes)
+
+
+def test_descriptor_scan_unparseable_falls_back_to_text(orchestrator):
     # No JSON recoverable — fall through to the text heuristics.
-    s = _step(output="mcp-scan crashed before emitting a report", command="mcp-scan scan")
+    s = _step(output="descriptor scan crashed before emitting a report", command=_SCAN_CMD)
     _, sev, _ = orchestrator.classify(s)
     assert sev == "INFO"

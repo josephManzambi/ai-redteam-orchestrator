@@ -1,9 +1,8 @@
 """Unit tests for `run_step` exit-code handling.
 
 These regressions cost real time during local runs:
-- promptfoo exits 100 when assertions fail (signal, not error).
-- mcp-scan exits non-zero when its JSON report contains findings.
-Both were tagged "errored" before the fix; these tests pin the contract.
+- promptfoo exits 100 when assertions fail (signal, not error) — it was
+  tagged "errored" before the fix; this test pins the contract.
 """
 from __future__ import annotations
 
@@ -59,23 +58,14 @@ def test_promptfoo_rc1_is_still_errored(orchestrator, monkeypatch):
     assert r["status"] == "errored"
 
 
-def test_mcp_scan_nonzero_with_findings_is_completed(orchestrator, monkeypatch):
-    payload = '{"results": [{"serverName": "x"}], "totalScanned": 1, "highCount": 1}'
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _completed(1, payload, ""))
-    r = orchestrator.run_step(
-        "scan", "npx -y mcp-scan@latest scan -c x.json --json", timeout=5
-    )
-    assert r["status"] == "completed"
-    assert "findings produced" in r["output"]
-
-
-def test_mcp_scan_nonzero_without_json_is_errored(orchestrator, monkeypatch):
-    """Non-zero with no scan JSON means the scanner itself blew up."""
+def test_descriptor_scan_nonzero_is_errored(orchestrator, monkeypatch):
+    """The MCP descriptor scan exits 0 on findings (grading happens in the
+    orchestrator), so a non-zero exit is a genuine failure, not a finding."""
     monkeypatch.setattr(
-        subprocess, "run", lambda *a, **k: _completed(1, "", "ENOENT: x.json")
+        subprocess, "run", lambda *a, **k: _completed(2, "", "usage: ...")
     )
     r = orchestrator.run_step(
-        "scan", "npx -y mcp-scan@latest scan -c missing.json --json", timeout=5
+        "scan", "uv run mcp_descriptor_scan.py missing.json", timeout=5
     )
     assert r["status"] == "errored"
 

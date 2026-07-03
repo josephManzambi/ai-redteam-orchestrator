@@ -135,10 +135,22 @@ def test_garak_default_probe_set_is_broad_and_shallow(orchestrator):
     assert "glitch" not in probes
 
 
-# ---------------- mcp-scan invocation ----------------
+# ---------------- MCP descriptor scan ----------------
 
-def test_mcp_scan_invocation_uses_dash_c_flag(orchestrator):
-    """`scan` takes the config via `-c <path>` — the positional form silently scans 0 servers."""
+def test_layer2_uses_builtin_descriptor_scan_not_external_mcp_scan(orchestrator):
+    """Layer 2 must run our built-in scanner, never the unrelated npm `mcp-scan`
+    (an inert config-linter) or the token-gated snyk-agent-scan."""
     import inspect
     src = inspect.getsource(orchestrator.layer2_targeted)
-    assert "scan -c " in src, "mcp-scan config path must be passed via -c"
+    assert "mcp_descriptor_scan.py" in src
+    assert "npx -y mcp-scan" not in src
+    assert "snyk-agent-scan" not in src
+
+
+def test_generated_descriptor_scan_parses_and_introspects(orchestrator):
+    """The generated introspection script must parse and actually connect to
+    the server (stdio_client + ClientSession + list_tools), not just lint a file."""
+    src = orchestrator._mcp_descriptor_scan_script()
+    ast.parse(src)  # raises SyntaxError on template drift
+    for symbol in ("stdio_client", "ClientSession", "list_tools", "initialize"):
+        assert symbol in src, f"introspection script must reference {symbol}"

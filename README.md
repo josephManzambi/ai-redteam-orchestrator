@@ -7,7 +7,7 @@ Point it at your own MCP server and the orchestrator throws four industry-standa
 | Layer | Purpose | Tools |
 |---|---|---|
 | **Layer 1** — Broad Scan | Wide-net vulnerability discovery | [Garak](https://github.com/NVIDIA/garak) + [Promptfoo](https://github.com/promptfoo/promptfoo) eval |
-| **Layer 2** — Targeted | OWASP LLM Top-10 taxonomy + MCP attack surface | [Promptfoo](https://github.com/promptfoo/promptfoo) redteam + [mcp-scan](https://github.com/invariantlabs-ai/mcp-scan) |
+| **Layer 2** — Targeted | OWASP LLM Top-10 taxonomy + MCP attack surface | [Promptfoo](https://github.com/promptfoo/promptfoo) redteam + a built-in MCP descriptor scan |
 | **Layer 3** — Adversarial | Multi-turn jailbreak + tree search | [PyRIT](https://github.com/Azure/PyRIT) Crescendo + TAP |
 
 Output is a Markdown report (and optionally a self-contained HTML report) with severity badges, an executive summary table, raw tool output in collapsible sections, and recommendations derived from what the run actually found.
@@ -26,7 +26,7 @@ Most red-team workflows require stitching together 3–4 tools manually, each wi
 
 - **One file, zero setup** — `uv run` handles all dependencies automatically
 - **Runs fully local** — Ollama target, no API keys needed
-- **Brings your own MCP server** — point Layer 2's mcp-scan at your real server with `--mcp-config`
+- **Brings your own MCP server** — point Layer 2's descriptor scan at your real server with `--mcp-config`
 - **Optional vulnerable demo target** — opt in with `--demo-vulnerable-server` if you want something to find out of the box (off by default)
 - **Covers breadth and depth** — broad scanning (Garak), targeted taxonomies (OWASP), and adversarial multi-turn attacks (PyRIT) in one run
 - **Produces auditable reports** — Markdown and HTML with severity classifications, not just raw logs
@@ -38,7 +38,7 @@ Most red-team workflows require stitching together 3–4 tools manually, each wi
 |---|---|---|
 | [uv](https://docs.astral.sh/uv/) | `brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh \| sh` | Python dependency management |
 | [Ollama](https://ollama.com) | `brew install ollama` or [download](https://ollama.com/download) | Local LLM serving |
-| [Node.js](https://nodejs.org/) | `brew install node` | Provides `npx` for Promptfoo and mcp-scan |
+| [Node.js](https://nodejs.org/) | `brew install node` | Provides `npx` for Promptfoo |
 
 ```bash
 # Start the Ollama daemon
@@ -50,7 +50,7 @@ ollama pull qwen2.5:3b
 
 ## Quick Start
 
-The default flow audits the LLM's general safety posture (Layers 1 + 3) and runs mcp-scan against **your** MCP server:
+The default flow audits the LLM's general safety posture (Layers 1 + 3) and runs the MCP descriptor scan against **your** MCP server:
 
 ```bash
 # Audit your own MCP server (recommended)
@@ -67,13 +67,13 @@ uv run redteam_orchestrator.py --mcp-config my.json --layers 2,3     # targeted 
 uv run redteam_orchestrator.py --mcp-config my.json --timeout 7200
 ```
 
-If you don't pass `--mcp-config`, the orchestrator still runs Layers 1 and 3 against the LLM — it just **skips mcp-scan** with a clear note in the report.
+If you don't pass `--mcp-config`, the orchestrator still runs Layers 1 and 3 against the LLM — it just **skips the MCP descriptor scan** with a clear note in the report.
 
-First run takes longer — `uv` builds an ephemeral venv from the script header, and `npx` fetches Promptfoo/mcp-scan. Subsequent runs are faster.
+First run takes longer — `uv` builds an ephemeral venv from the script header, and `npx` fetches Promptfoo. Subsequent runs are faster.
 
 ## Trying It Without Your Own MCP Server
 
-If you want to see the whole pipeline including Layer 2 mcp-scan but don't have an MCP server to point at, opt in to the built-in demo target:
+If you want to see the whole pipeline including the Layer 2 descriptor scan but don't have an MCP server to point at, opt in to the built-in demo target:
 
 ```bash
 uv run redteam_orchestrator.py --demo-vulnerable-server --html
@@ -94,7 +94,7 @@ options:
   --target TARGET            Ollama model to audit (default: qwen2.5:3b)
   --provider PROVIDER        LLM provider prefix for Promptfoo (default: ollama)
   --timeout TIMEOUT          Per-step timeout in seconds (default: 3600)
-  --mcp-config CONFIG        Path to your own mcp-scan client config JSON (Layer 2)
+  --mcp-config CONFIG        Path to your MCP client config JSON (Layer 2 descriptor scan)
   --demo-vulnerable-server   Install + target the built-in vulnerable demo (off by default)
   --html                     Also generate a self-contained HTML report
   --no-versions              Skip the tool-version probe in the report header
@@ -161,7 +161,30 @@ Tests against known vulnerability taxonomies and audits the MCP tool surface.
   `_promptfoo_owasp_config()` and pass `--timeout 14400` or higher. The
   trim is pinned by `tests/test_generated_artifacts.py` so it cannot
   silently re-bloat.
-- **mcp-scan** statically audits an MCP server's tool descriptors for prompt injection vectors, tool poisoning, and unsafe patterns. Runs against `--mcp-config` if you provide one, the built-in demo if `--demo-vulnerable-server` is set, otherwise **skipped** with a clear note in the report.
+- **MCP descriptor scan** (built-in) connects to the server over stdio, pulls
+  its `tools/list`, and statically audits each tool descriptor for tool
+  poisoning (hidden instructions in descriptions), data-exfiltration cues,
+  invisible/bidirectional Unicode, secret-format tokens, self-described
+  command execution, and cross-server tool-name shadowing. It reads
+  descriptors, it does not execute tools. Runs against `--mcp-config` if you
+  provide one, the built-in demo if `--demo-vulnerable-server` is set,
+  otherwise **skipped** with a clear note in the report. The rule engine lives
+  in `analyze_tool_descriptors()` (unit-tested in
+  `tests/test_descriptor_scan.py`) and the live introspection runs as the
+  generated `mcp_descriptor_scan.py`.
+
+> **Why a built-in scanner and not `mcp-scan`?** The MCP scanner supply chain
+> shifted under this project. The tool this layer originally shelled out to
+> (`npx mcp-scan`) turned out to be an unrelated npm package that only
+> regex-lints the config file — it never connects to the server, so it cannot
+> see tool descriptions at all (it missed blatant tool-poisoning fixtures and
+> emitted false criticals on long file paths). Meanwhile the well-known
+> Invariant Labs `mcp-scan` was acquired by Snyk and renamed to
+> `snyk-agent-scan`, which now requires a Snyk cloud token and sends tool
+> descriptors off-box for analysis. Neither fits a fully-local, reproducible,
+> no-API-keys pipeline, so Layer 2 now ships its own transparent, offline
+> descriptor scanner. Its severities are heuristic (see the limitations
+> below).
 
 ### Layer 3 — Adversarial
 
@@ -183,9 +206,9 @@ pinned by `tests/test_generated_artifacts.py`.
 
 ### Per-step timeouts
 
-Not every step is equally expensive. mcp-scan and Promptfoo's broad eval
-finish in seconds; only Promptfoo's OWASP redteam preset can take an hour
-or more on a laptop 7B. So that one step gets a larger per-layer timeout
+Not every step is equally expensive. The MCP descriptor scan and Promptfoo's
+broad eval finish in seconds; only Promptfoo's OWASP redteam preset can take an
+hour or more on a laptop 7B. So that one step gets a larger per-layer timeout
 budget, while every other step (Garak included) uses the global ceiling:
 
 | Step                          | Timeout (seconds) |
@@ -193,7 +216,7 @@ budget, while every other step (Garak included) uses the global ceiling:
 | Garak broad scan              | 3600 (uses `--timeout`) |
 | Promptfoo broad evaluation    | 3600 (uses `--timeout`) |
 | Promptfoo OWASP redteam preset| 7200 (2h, per-layer override) |
-| mcp-scan static audit         | 3600 (uses `--timeout`) |
+| MCP descriptor scan           | 3600 (uses `--timeout`) |
 | PyRIT Crescendo               | 3600 (uses `--timeout`) |
 | PyRIT Tree of Attacks         | 3600 (uses `--timeout`) |
 
@@ -237,9 +260,9 @@ Levels: 🟢 Direct · 🟡 Partial · 🔵 Indirect · ⬜ Not covered
 
 | ID | Risk | Coverage | Provided by |
 |---|---|---|---|
-| MCP01 | Token Mismanagement & Secret Exposure | 🔵 Indirect | mcp-scan flags high-entropy strings in tool arguments _(static heuristic only; no token lifecycle/rotation testing)_ |
-| MCP02 | Excessive Permissions & Privilege Escalation | 🟡 Partial | mcp-scan flags risky capability combos (e.g. filesystem + network = exfiltration vector) _(static; no runtime privilege-escalation testing)_ |
-| MCP03 | Tool Poisoning | 🟡 Partial | mcp-scan static audit of tool descriptors for injection/poisoning patterns _(descriptor-level only; no behavioural detection)_ |
+| MCP01 | Token Mismanagement & Secret Exposure | 🔵 Indirect | MCP descriptor scan flags secret-format tokens in tool descriptors _(static heuristic only; no token lifecycle/rotation testing)_ |
+| MCP02 | Excessive Permissions & Privilege Escalation | 🟡 Partial | MCP descriptor scan flags tools that self-describe arbitrary command/code execution _(static; no runtime privilege-escalation testing)_ |
+| MCP03 | Tool Poisoning | 🟡 Partial | MCP descriptor scan audits tool descriptors for hidden instructions, invisible-Unicode, and exfiltration cues _(descriptor-level only; no behavioural detection)_ |
 | MCP04 | Software Supply Chain & Dependency Tampering | ⬜ Not covered | _Garak packagehallucination is model-layer, not MCP dependency tampering_ |
 | MCP05 | Command Injection | 🟢 Direct | Promptfoo eval (whoami, '; id'), Garak exploitation, PyRIT objectives coercing system_diagnostics '; cat /etc/passwd' |
 | MCP06 | Context Over-sharing | ⬜ Not covered | — |
@@ -286,7 +309,7 @@ Then run:
 uv run redteam_orchestrator.py --mcp-config my_mcp_client.json --layers 2
 ```
 
-**Scope:** `--mcp-config` applies to Layer 2 only (mcp-scan). Layers 1 and 3 test the LLM's general safety posture — prompt injection resistance, jailbreak resilience — independent of which MCP server is in play. To customize Layer 3's attack objectives for your specific tool surface, edit the `_pyrit_crescendo_script()` and `_pyrit_tap_script()` functions in the orchestrator, or run standalone PyRIT scripts.
+**Scope:** `--mcp-config` applies to Layer 2 only (the MCP descriptor scan). Layers 1 and 3 test the LLM's general safety posture — prompt injection resistance, jailbreak resilience — independent of which MCP server is in play. To customize Layer 3's attack objectives for your specific tool surface, edit the `_pyrit_crescendo_script()` and `_pyrit_tap_script()` functions in the orchestrator, or run standalone PyRIT scripts.
 
 ## Cleanup
 
@@ -310,7 +333,7 @@ uv run redteam_orchestrator.py --clean-all -y
 
 | Tier | Files |
 |---|---|
-| `--clean` | `mcp_server.py` (if installed), `promptfoo_*.json`, `mcp_scan_client.json`, `attack_pyrit_*.py`, `RedTeam_Report.md`, `RedTeam_Report.html`, `garak.log`, `garak_report*`, `.promptfoo*`, `redteam-output*` |
+| `--clean` | `mcp_server.py` (if installed), `promptfoo_*.json`, `mcp_scan_client.json`, `mcp_descriptor_scan.py`, `attack_pyrit_*.py`, `RedTeam_Report.md`, `RedTeam_Report.html`, `garak.log`, `garak_report*`, `.promptfoo*`, `redteam-output*` |
 | `--clean-deep` | Above + `uv cache clean` + `npm cache clean --force` + `~/.pyrit/` |
 | `--clean-all` | Above + `ollama rm <target model>` |
 
@@ -323,14 +346,19 @@ contracts that have actually broken in the wild:
 
 - `test_classify.py` — severity heuristics: `/etc/passwd` leak → CRITICAL,
   jailbreak markers → HIGH, errored/timed-out steps → NOT_RUN (never
-  INFO).
+  INFO); the descriptor-scan report's severity counts drive the grade.
 - `test_run_step.py` — exit-code handling: promptfoo `rc=100` (assertions
-  failed) and mcp-scan `rc!=0` (findings present) are both reclassified
-  as `completed`, not `errored`.
+  failed) is reclassified as `completed`, not `errored`.
+- `test_descriptor_scan.py` — the MCP descriptor rule engine: poisoned
+  descriptions (hidden instructions, exfiltration, invisible Unicode,
+  secrets, self-described command execution, tool shadowing) are flagged,
+  while benign tools and long random paths produce zero findings (the
+  false-positive that the abandoned npm `mcp-scan` got wrong).
 - `test_generated_artifacts.py` — generated PyRIT scripts must parse,
-  must use `OpenAIChatTarget` (not the dropped `OllamaChatTarget`), and
-  the trimmed Promptfoo / TAP / Garak scopes are pinned so they cannot
-  silently re-bloat.
+  must use `OpenAIChatTarget` (not the dropped `OllamaChatTarget`), the
+  trimmed Promptfoo / TAP / Garak scopes are pinned so they cannot
+  silently re-bloat, and Layer 2 must use the built-in descriptor scan
+  (never the unrelated `npx mcp-scan` or the token-gated `snyk-agent-scan`).
 
 ```bash
 uv run --with pytest --with rich --with "pyrit==0.8.1" pytest tests/ -v
@@ -390,6 +418,7 @@ Likely Promptfoo's generation phase is trying to reach OpenAI instead of Ollama.
 # Generated at runtime (cleaned by --clean):
 ├── promptfoo_broad.json        # Layer 1 Promptfoo config
 ├── promptfoo_owasp.json        # Layer 2 Promptfoo config
+├── mcp_descriptor_scan.py      # Layer 2 MCP introspection script
 ├── attack_pyrit_crescendo.py   # Layer 3 Crescendo script
 ├── attack_pyrit_tap.py         # Layer 3 TAP script
 ├── RedTeam_Report.md           # Markdown report
@@ -399,7 +428,7 @@ Likely Promptfoo's generation phase is trying to reach OpenAI instead of Ollama.
 
 # Generated only with --demo-vulnerable-server:
 ├── mcp_server.py               # deliberately vulnerable MCP server (opt-in)
-└── mcp_scan_client.json        # mcp-scan target descriptor for the demo
+└── mcp_scan_client.json        # client config pointing at the demo server
 ```
 
 ## Known Limitations
