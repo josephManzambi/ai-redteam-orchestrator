@@ -1379,6 +1379,23 @@ def _recommendations(layers: dict[str, dict[str, dict]]) -> list[tuple[str, str]
 
 
 # ---------- Markdown report ----------
+def _fence_for(text: str) -> str:
+    """A backtick fence guaranteed to survive `text` as a code-block body.
+
+    CommonMark closes a fenced block only on a line holding at least as many
+    backticks as the opener, so a fence one longer than the longest backtick
+    run in the content cannot be broken out of by attacker-influenced output.
+    """
+    longest = run = 0
+    for ch in text:
+        if ch == "`":
+            run += 1
+            longest = max(longest, run)
+        else:
+            run = 0
+    return "`" * max(3, longest + 1)
+
+
 def _md_section(f, title: str, step: dict) -> None:
     status, severity, notes = classify(step)
     badge = {
@@ -1398,9 +1415,11 @@ def _md_section(f, title: str, step: dict) -> None:
     f.write("**Notes:**\n")
     for n in notes:
         f.write(f"- {n}\n")
-    f.write("\n<details>\n<summary>Raw output</summary>\n\n```\n")
-    f.write(content[:12000])
-    f.write("\n```\n")
+    body = content[:12000]
+    fence = _fence_for(body)
+    f.write(f"\n<details>\n<summary>Raw output</summary>\n\n{fence}\n")
+    f.write(body)
+    f.write(f"\n{fence}\n")
     if len(content) > 12000:
         f.write(f"\n_Truncated. Full length: {len(content)} chars._\n")
     f.write("\n</details>\n\n")
