@@ -87,8 +87,9 @@ uv run redteam_orchestrator.py --demo-vulnerable-server --html
 usage: redteam_orchestrator.py [-h] [--target TARGET] [--provider PROVIDER]
                                [--timeout TIMEOUT] [--mcp-config MCP_CONFIG]
                                [--demo-vulnerable-server] [--html]
-                               [--no-versions] [--layers LAYERS] [--clean]
-                               [--clean-deep] [--clean-all] [--yes]
+                               [--no-versions] [--layers LAYERS]
+                               [--fresh-pyrit-memory | --no-fresh-pyrit-memory]
+                               [--clean] [--clean-deep] [--clean-all] [--yes]
 
 options:
   --target TARGET            Ollama model to audit (default: qwen2.5:3b)
@@ -99,6 +100,9 @@ options:
   --html                     Also generate a self-contained HTML report
   --no-versions              Skip the tool-version probe in the report header
   --layers LAYERS            Comma-separated layer subset, e.g. '1,3' (default: 1,2,3)
+  --fresh-pyrit-memory       Clear ~/.pyrit before Layer 3 so a stale transcript
+                             can't colour scoring (default: on; use
+                             --no-fresh-pyrit-memory to keep it)
   --clean                    Remove generated files only (fast, safe)
   --clean-deep               Files + uv cache + npm cache + ~/.pyrit state
   --clean-all                Deep clean + remove the Ollama target model
