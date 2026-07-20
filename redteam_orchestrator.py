@@ -105,6 +105,7 @@ class Config:
     mcp_config: str | None = None
     html: bool = False
     demo_server: bool = False
+    pyrit_memory: str = "n/a"
 
 
 cfg = Config()
@@ -642,6 +643,21 @@ def _clean_pyrit_state() -> None:
         console.print(f"[dim]  removed {pyrit_dir}[/dim]")
     else:
         console.print("[dim]  nothing to remove[/dim]")
+
+
+def _maybe_reset_pyrit_memory(selected: set[int], fresh: bool) -> str:
+    """Clear PyRIT's persisted memory before a Layer-3 run unless opted out.
+
+    PyRIT keeps conversation memory in ~/.pyrit (DuckDB) between runs; a stale
+    transcript can colour today's scoring. Only fires when Layer 3 is selected.
+    Returns a short status for the report ("reset", "reused", or "n/a").
+    """
+    if 3 not in selected:
+        return "n/a (Layer 3 not selected)"
+    if not fresh:
+        return "reused (--no-fresh-pyrit-memory)"
+    _clean_pyrit_state()
+    return "reset"
 
 
 def cleanup(mode: str = "files") -> None:
@@ -1254,6 +1270,7 @@ def _report_header(versions: dict | None = None) -> dict:
             cfg.mcp_config
             or ("built-in vulnerable demo server" if cfg.demo_server else "none (MCP descriptor scan skipped)")
         ),
+        "pyrit_memory": cfg.pyrit_memory,
     }
     if versions:
         base["tool_versions"] = ", ".join(f"{k}={v}" for k, v in versions.items())
@@ -2049,6 +2066,11 @@ def main() -> int:
     # Layers
     parser.add_argument("--layers", default="1,2,3",
                         help="Comma-separated layer subset, e.g. '1,3' (default: 1,2,3)")
+    parser.add_argument("--fresh-pyrit-memory", action=argparse.BooleanOptionalAction,
+                        default=True,
+                        help="Clear PyRIT's ~/.pyrit memory before Layer 3 so a stale "
+                             "transcript can't colour scoring (default: on; "
+                             "--no-fresh-pyrit-memory to keep it)")
 
     # Cleanup
     parser.add_argument("--clean", action="store_true",
@@ -2116,6 +2138,8 @@ def main() -> int:
         f"MCP target: {mcp_label}",
         title="Start", style="green",
     ))
+
+    cfg.pyrit_memory = _maybe_reset_pyrit_memory(selected, args.fresh_pyrit_memory)
 
     write_files()
 
