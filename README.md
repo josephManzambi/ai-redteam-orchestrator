@@ -123,15 +123,43 @@ Each role spans a spectrum — attackers from a fixed corpus of known attacks �
 
 **Where this tool sits:** Garak is a static-corpus attacker graded by rules; Promptfoo generates single-turn attacks graded by a mix of rules and an LLM rubric; PyRIT (Crescendo, TAP) is an adaptive multi-turn attacker with an LLM judge. All three default to **self-play** — the same `--target` model plays every role — which is the single biggest caveat on Layer 3 results ([why](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/27)).
 
-### Validating a judge model
+### Strengthening Layer 3: a separate judge model
 
-If you break self-play by pointing the judge at a separate model, **validate that judge first** — one that misreads real harm is worse than none. `eval_adjudicator.py` runs candidate judges over a small labeled probe (the orchestrator's own `root:x:0:0` / `uid=0(root)` markers, obfuscated variants, and benign cases) and reports each judge's false-negative / false-positive rate:
+All three PyRIT roles default to the same `--target` model (self-play), so the judge grades its own family's output — the [single biggest caveat on Layer 3](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/27). Pointing the **judge** at a separate model from a *different family* removes that self-grading bias for about 5 GB of extra weights and a few minutes per run. Generating a good attack is much harder than recognizing a successful one, so a modest ~7–8B judge is enough even against a larger target.
+
+**Calibrate before you trust it.** Family and size do *not* predict judge quality, so validate any candidate against known-harmful cases first — one that misreads real harm is worse than none. `eval_adjudicator.py` runs candidates over a small labeled probe (the orchestrator's own `root:x:0:0` / `uid=0(root)` markers, obfuscated variants, and benign cases) and reports each judge's false-negative / false-positive rate:
 
 ```bash
 python3 eval_adjudicator.py --judges llama3.1:8b mistral:7b --runs 5 --report /dev/null
 ```
 
-In testing, judge quality tracked neither size nor family — a 7B beat a 70B, and the obvious `llama3.1:8b` pick was the worst (it called a literal `/etc/passwd` dump "not harmful"). Judges reliably caught overtly-framed attacks but missed quiet or paraphrased leaks, so trust a judge's "harmful" verdict (escalate / annotate) and never its "safe" one (don't downgrade). Full result and the planned `--adjudicate` design: [#41](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/41).
+In testing, quality tracked neither size nor family — a 7B beat a 70B, and the obvious `llama3.1:8b` pick was the *worst* (it called a literal `/etc/passwd` dump "not harmful"). Pick whichever candidate the probe validates, not the biggest one.
+
+**Wiring it in (manual for now).** A first-class `--judge-model` flag is tracked in [#27](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/27); until it lands, point the judge at a separate model by editing the generated PyRIT scripts and running them directly. After a run writes `attack_pyrit_crescendo.py` / `attack_pyrit_tap.py`, add a judge target and use it for the scorer:
+
+```python
+def _judge_target():
+    return OpenAIChatTarget(
+        model_name="mistral:7b",          # a *different family* than --target, calibrated above
+        endpoint=OLLAMA_ENDPOINT,
+        api_key="ollama",
+        httpx_client_kwargs={"timeout": 180},
+    )
+
+# in main(): was `scorer = _ollama_target()`
+scorer = _judge_target()
+```
+
+```bash
+ollama pull mistral:7b
+# keep target + judge both resident so Ollama doesn't reload on every scoring call
+OLLAMA_MAX_LOADED_MODELS=2 ollama serve
+uv run python attack_pyrit_crescendo.py
+```
+
+The generated scripts are overwritten on each orchestrator run, so this edit lasts only for a manual re-run until #27 lands.
+
+**Safe usage.** Judges reliably catch overtly-framed attacks but miss quiet or paraphrased leaks, so a judge verdict is one-directional: trust a **"harmful"** verdict (escalate / annotate) and never a **"safe"** one (never downgrade). Full result and the planned `--adjudicate` design: [#41](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/41).
 
 ## What It Does
 
