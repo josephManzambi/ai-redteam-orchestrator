@@ -1,0 +1,88 @@
+{
+  "results": [
+    {
+      "serverName": "log-reader",
+      "toolName": "critical-test-client",
+      "configPath": "/scan-target/critical-test-client.json",
+      "findings": [
+        {
+          "id": "high-entropy-value",
+          "severity": "MEDIUM",
+          "description": "High-entropy string (4.80 bits/char) detected in argument. This might be an undocumented secret.",
+          "fixRecommendation": "Check whether this value is a sensitive credential. If so, move it to an environment variable."
+        },
+        {
+          "id": "prompt-injection-pattern",
+          "severity": "HIGH",
+          "description": "Potential prompt injection (Base64-like string > 50 chars) detected.",
+          "fixRecommendation": "Review the server description and arguments for long Base64-like encoded strings that could hide malicious instructions."
+        },
+        {
+          "id": "prompt-injection-pattern",
+          "severity": "HIGH",
+          "description": "Long encoded string (potential hidden instructions) detected.",
+          "fixRecommendation": "Decode and review any long opaque strings in tool descriptions or arguments."
+        },
+        {
+          "id": "exfiltration-vector",
+          "severity": "MEDIUM",
+          "description": "Tool argument contains a potential external network endpoint: '/scan-target/critical-test-target.py'.",
+          "fixRecommendation": "Review if this tool should be making outbound network calls to this endpoint."
+        },
+        {
+          "id": "exfiltration-vector",
+          "severity": "MEDIUM",
+          "description": "Tool argument contains a potential external network endpoint: '/scan-target/cache/a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6/scratch/output.log'.",
+          "fixRecommendation": "Review if this tool should be making outbound network calls to this endpoint."
+        },
+        {
+          "id": "data-controls-pii",
+          "severity": "CRITICAL",
+          "description": "Server handles PII/Sensitive data: API Key",
+          "fixRecommendation": "Implement strict data minimization. Ensure all PII is encrypted and handled according to privacy policies."
+        },
+        {
+          "id": "data-controls-consent-gap",
+          "severity": "MEDIUM",
+          "description": "Server handles PII but no consent mechanism or privacy policy reference detected.",
+          "fixRecommendation": "Implement explicit user consent for PII processing and link to a privacy policy."
+        },
+        {
+          "id": "data-controls-retention-gap",
+          "severity": "MEDIUM",
+          "description": "Server handles PII but no data retention policy or auto-cleanup detected.",
+          "fixRecommendation": "Implement data retention policies (e.g., TTL, automatic cleanup of old records)."
+        },
+        {
+          "id": "data-controls-deletion-gap",
+          "severity": "MEDIUM",
+          "description": "Server handles PII but no user-initiated data deletion capability detected.",
+          "fixRecommendation": "Provide a tool or endpoint that allows users to request the deletion of their personal data."
+        },
+        {
+          "id": "data-controls-encryption-gap",
+          "severity": "HIGH",
+          "description": "Server handles PII but no encryption at rest detected for stored data.",
+          "fixRecommendation": "Encrypt sensitive data at rest using strong cryptographic standards (e.g., AES-256)."
+        }
+      ],
+      "scanDurationMs": 5,
+      "connection": {
+        "command": "python3",
+        "args": [
+          "/scan-target/critical-test-target.py",
+          "--path",
+          "/scan-target/cache/a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6/scratch/output.log"
+        ]
+      }
+    }
+  ],
+  "totalScanned": 1,
+  "criticalCount": 1,
+  "highCount": 3,
+  "mediumCount": 6,
+  "lowCount": 0,
+  "infoCount": 0,
+  "totalDurationMs": 6,
+  "version": "2.0.2"
+}
