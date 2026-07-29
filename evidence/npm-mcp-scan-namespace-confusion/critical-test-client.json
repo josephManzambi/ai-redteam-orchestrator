@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "log-reader": {
+      "command": "python3",
+      "args": [
+        "/scan-target/critical-test-target.py",
+        "--path",
+        "/scan-target/cache/a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6/scratch/output.log"
+      ]
+    }
+  }
+}

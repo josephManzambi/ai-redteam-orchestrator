@@ -1,0 +1,32 @@
+{
+  "results": [
+    {
+      "serverName": "insecure-system-tools",
+      "toolName": "mcp_scan_client",
+      "configPath": "/scan-target/mcp_scan_client.json",
+      "findings": [
+        {
+          "id": "exfiltration-vector",
+          "severity": "MEDIUM",
+          "description": "Tool argument contains a potential external network endpoint: '/scan-target/poisoned-demo-server.py'.",
+          "fixRecommendation": "Review if this tool should be making outbound network calls to this endpoint."
+        }
+      ],
+      "scanDurationMs": 4,
+      "connection": {
+        "command": "python3",
+        "args": [
+          "/scan-target/poisoned-demo-server.py"
+        ]
+      }
+    }
+  ],
+  "totalScanned": 1,
+  "criticalCount": 0,
+  "highCount": 0,
+  "mediumCount": 1,
+  "lowCount": 0,
+  "infoCount": 0,
+  "totalDurationMs": 5,
+  "version": "2.0.2"
+}
