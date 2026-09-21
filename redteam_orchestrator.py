@@ -6,7 +6,9 @@
 # # `uv run python attack_pyrit_*.py` subprocesses, which inherit it.
 # requires-python = ">=3.10,<3.13"
 # dependencies = [
-#   "mcp[cli]",
+#   # Pinned: mcp 2.x renamed `FastMCP` -> `MCPServer`, so the generated
+#   # demo server dies on import and the descriptor scan reaches no server.
+#   "mcp[cli]<2",
 #   # PyRIT 0.9 dropped `pyrit.orchestrator` in favor of `pyrit.executor.attack`.
 #   # Pin to the last release that exposes CrescendoOrchestrator and
 #   # TreeOfAttacksWithPruningOrchestrator at the legacy import path.
@@ -1076,19 +1078,31 @@ def _scan_report_severity(output: str) -> tuple[str, list[str]] | None:
     tier_to_sev = {
         "critical": "CRITICAL", "high": "HIGH", "medium": "MEDIUM", "low": "INFO",
     }
+    servers = report.get("servers") or []
+    failed = [s.get("name") for s in servers if s.get("status") != "ok"]
+    partial = (" Coverage is partial: could not introspect "
+               + ", ".join(str(x) for x in failed) + ".") if failed else ""
+
     for tier in ("critical", "high", "medium", "low"):
         if counts[tier] > 0:
             present = ", ".join(
                 f"{counts[t]} {t}" for t in ("critical", "high", "medium", "low")
                 if counts[t] > 0
             )
-            return tier_to_sev[tier], [f"MCP descriptor scan reported findings ({present})."]
+            return tier_to_sev[tier], [
+                f"MCP descriptor scan reported findings ({present})." + partial]
 
-    failed = [s.get("name") for s in (report.get("servers") or [])
-              if s.get("status") != "ok"]
+    # A scan that reached no server did not run, and must not share a bucket
+    # with a scan that ran and found nothing. Grading it INFO is precisely the
+    # false assurance this project documents in npm `mcp-scan`: a scanner that
+    # never connects to its target still reports clean, and a CI gate wired to
+    # it goes green. See evidence/npm-mcp-scan-namespace-confusion/.
+    if not servers or len(failed) == len(servers):
+        detail = ", ".join(str(x) for x in failed) if failed else "no servers reached"
+        return "NOT_RUN", ["MCP descriptor scan did not run: " + detail + "."]
     if failed:
-        return "INFO", ["MCP descriptor scan completed; could not introspect: "
-                        + ", ".join(str(x) for x in failed) + "."]
+        return "WARN", ["MCP descriptor scan partially completed; could not "
+                        "introspect: " + ", ".join(str(x) for x in failed) + "."]
     return "INFO", ["MCP descriptor scan completed with no findings."]
 
 
