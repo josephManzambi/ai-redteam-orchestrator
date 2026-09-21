@@ -1,6 +1,8 @@
 """Unit tests for `classify` severity logic."""
 from __future__ import annotations
 
+import json as _json
+
 
 def _step(
     output: str = "",
@@ -217,12 +219,64 @@ def test_descriptor_scan_no_findings_is_info(orchestrator):
     assert any("no findings" in n.lower() for n in notes)
 
 
-def test_descriptor_scan_failed_server_is_info_with_note(orchestrator):
-    # A server that could not be introspected is called out, not graded clean.
+def test_descriptor_scan_all_servers_failed_is_not_run(orchestrator):
+    # Every server failed introspection, so the scan did not happen. It must
+    # NOT share a severity with a scan that ran and found nothing: that is the
+    # npm `mcp-scan` false-assurance failure this project documents.
     s = _step(output=_descriptor_report(failed=["broken-server"]), command=_SCAN_CMD)
     _, sev, notes = orchestrator.classify(s)
-    assert sev == "INFO"
-    assert any("could not introspect" in n.lower() for n in notes)
+    assert sev == "NOT_RUN"
+    assert any("did not run" in n.lower() for n in notes)
+
+
+def test_descriptor_scan_no_servers_reached_is_not_run(orchestrator):
+    # The observed real-world case: 0 servers, 0 tools, still graded INFO clean.
+    report = _json.dumps({
+        "scanner": "mcp-descriptor-scan", "version": "1.0",
+        "totalServers": 0, "totalTools": 0, "servers": [], "findings": [],
+        "criticalCount": 0, "highCount": 0, "mediumCount": 0,
+        "lowCount": 0, "infoCount": 0,
+    })
+    s = _step(output=report, command=_SCAN_CMD)
+    _, sev, notes = orchestrator.classify(s)
+    assert sev == "NOT_RUN"
+    assert any("no servers reached" in n.lower() for n in notes)
+
+
+def test_descriptor_scan_partial_failure_is_warn(orchestrator):
+    # Some servers introspected, some did not: real but incomplete coverage.
+    report = _json.dumps({
+        "scanner": "mcp-descriptor-scan", "version": "1.0",
+        "totalServers": 2, "totalTools": 1,
+        "servers": [
+            {"name": "good", "status": "ok", "error": None, "toolCount": 1},
+            {"name": "bad", "status": "error", "error": "boom", "toolCount": 0},
+        ],
+        "findings": [], "criticalCount": 0, "highCount": 0,
+        "mediumCount": 0, "lowCount": 0, "infoCount": 0,
+    })
+    s = _step(output=report, command=_SCAN_CMD)
+    _, sev, notes = orchestrator.classify(s)
+    assert sev == "WARN"
+    assert any("partially completed" in n.lower() for n in notes)
+
+
+def test_descriptor_scan_findings_note_partial_coverage(orchestrator):
+    # A real finding still outranks incomplete coverage, but the gap is stated.
+    report = _json.dumps({
+        "scanner": "mcp-descriptor-scan", "version": "1.0",
+        "totalServers": 2, "totalTools": 1,
+        "servers": [
+            {"name": "good", "status": "ok", "error": None, "toolCount": 1},
+            {"name": "bad", "status": "error", "error": "boom", "toolCount": 0},
+        ],
+        "findings": [], "criticalCount": 0, "highCount": 1,
+        "mediumCount": 0, "lowCount": 0, "infoCount": 0,
+    })
+    s = _step(output=report, command=_SCAN_CMD)
+    _, sev, notes = orchestrator.classify(s)
+    assert sev == "HIGH"
+    assert any("coverage is partial" in n.lower() for n in notes)
 
 
 def test_descriptor_scan_unparseable_falls_back_to_text(orchestrator):

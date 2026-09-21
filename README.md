@@ -378,7 +378,9 @@ contracts that have actually broken in the wild:
 
 - `test_classify.py` — severity heuristics: `/etc/passwd` leak → CRITICAL,
   jailbreak markers → HIGH, errored/timed-out steps → NOT_RUN (never
-  INFO); the descriptor-scan report's severity counts drive the grade.
+  INFO); the descriptor-scan report's severity counts drive the grade. A
+  descriptor scan that reached **no** server is NOT_RUN and one that reached
+  only some is WARN — a scan that introspected nothing is not a clean scan.
 - `test_run_step.py` — exit-code handling: promptfoo `rc=100` (assertions
   failed) is reclassified as `completed`, not `errored`.
 - `test_descriptor_scan.py` — the MCP descriptor rule engine: poisoned
