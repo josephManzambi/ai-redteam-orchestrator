@@ -1645,6 +1645,64 @@ def render_owasp_coverage_html() -> str:
     return "\n".join(out)
 
 
+# ---------- limitations ----------
+# The project's own documented boundaries (issues #27-#34). They lived only in
+# the README and the issue tracker, so they never travelled with the artifact a
+# reader actually receives. A report that asserts severities without stating
+# their basis is the same false assurance this project exists to expose.
+# Each entry is (applies_when, title, body); "always" entries are unconditional.
+_LIMITATIONS: list[tuple[str, str, str]] = [
+    ("always", "A clean run is a smoke test, not an assessment",
+     "Automation can cheaply generate attacks and recognise obvious successes. "
+     "It cannot replace a skilled human adversary or a stronger attacker model. "
+     "Nothing here is evidence that the target is secure."),
+    ("always", "Severity is heuristic, with false-negative risk",
+     "Severity is derived from word-boundary keyword and regex matching over "
+     "tool output, hardened against the obvious false positives. A novel "
+     "phrasing of a real success will be graded lower than it deserves."),
+    ("always", "Scope is trimmed for laptop-grade targets",
+     "To finish in CI-friendly time the defaults are shallow, and probes fire "
+     "once with no pinned seed, so results are not reproducible run to run. "
+     "\"Clean within budget\" is not the same as secure."),
+    ("always", "Toolchain version drift is load-bearing",
+     "Four independently-versioned tools are stitched together and only some "
+     "can be pinned. Upstream changes have broken this pipeline before now. "
+     "The tool versions in the header above are part of the finding."),
+    ("pyrit", "The same model is target, attacker and judge",
+     "Layer 3 wires one local model into all three roles: the defender, the "
+     "adversarial chat, and the scorer. A model is a poor judge of whether it "
+     "was itself jailbroken, which biases this run toward under-reporting."),
+    ("promptfoo", "Promptfoo's OWASP generation is cloud-gated",
+     "The OWASP/red-team test-case generator is a hosted feature. Offline, the "
+     "security and harmful:* plugins produce zero tests, so an offline run "
+     "covers less than the preset name suggests."),
+    ("mcp", "MCP coverage is static and single-server",
+     "The descriptor scan audits tool descriptors as they appear at scan time. "
+     "Runtime behaviour, redefinition after approval, and multi-agent "
+     "interaction are structurally out of scope."),
+]
+
+
+def _limitations(layers: dict[str, dict[str, dict]]) -> list[tuple[str, str]]:
+    """Return the limitations that actually apply to this run.
+
+    A limitation about a tool that never ran is noise, and noise is what stops
+    people reading the section that matters.
+    """
+    cmds = " ".join(
+        (step.get("command", "") or "")
+        for steps in layers.values() for step in steps.values()
+    ).lower()
+    applies = {
+        "always": True,
+        "pyrit": "pyrit" in cmds,
+        "promptfoo": "promptfoo" in cmds,
+        "mcp": "mcp_descriptor_scan" in cmds or "mcp-scan" in cmds,
+    }
+    return [(title, body) for when, title, body in _LIMITATIONS
+            if applies.get(when, False)]
+
+
 def write_report_md(layers: dict[str, dict[str, dict]], versions: dict | None = None) -> None:
     meta = _report_header(versions)
     rows = _summary_rows(layers)
@@ -1658,6 +1716,9 @@ def write_report_md(layers: dict[str, dict[str, dict]], versions: dict | None = 
         if stats["incomplete"]:
             f.write(f"> ⚠️ **{stats['incomplete']} of {stats['total']} steps did not complete.** "
                     f"Severities below only apply to completed steps.\n\n")
+        f.write("> **Read [Limitations](#limitations) before acting on this report.** "
+                "This is a fast automated smoke test, not a security assessment, "
+                "and its severities are heuristic.\n\n")
         f.write("## Executive Summary\n\n")
         f.write("| Layer | Step | Status | Severity | Duration |\n|---|---|---|---|---|\n")
         for layer, step, status, sev, duration in rows:
@@ -1668,6 +1729,12 @@ def write_report_md(layers: dict[str, dict[str, dict]], versions: dict | None = 
             for step_name, step in steps.items():
                 _md_section(f, step_name, step)
         f.write(render_owasp_coverage_md())
+        f.write("\n")
+        f.write("## Limitations\n\n")
+        f.write("These are known, accepted boundaries of the tool, not defects. "
+                "They bound what the findings above can support.\n\n")
+        for title, body in _limitations(layers):
+            f.write(f"- **{title}.** {body}\n")
         f.write("\n")
         f.write("## Recommendations\n\n")
         for i, (title, body) in enumerate(_recommendations(layers), 1):
@@ -1782,6 +1849,14 @@ def write_report_html(layers: dict[str, dict[str, dict]], versions: dict | None 
             f"not complete.</strong> Severities below only apply to steps with status <em>completed</em>.</div>\n"
         )
 
+    # Always-on scope banner. A reader who acts on the severities without this
+    # has been told less than the tool knows.
+    parts.append(
+        "<div class='banner warn'><strong>Read <a href='#limitations'>Limitations</a> before "
+        "acting on this report.</strong> This is a fast automated smoke test, not a security "
+        "assessment, and its severities are heuristic.</div>\n"
+    )
+
     # Summary stat strip.
     parts.append("<p class='step-meta'>")
     parts.append(
@@ -1842,6 +1917,16 @@ def write_report_html(layers: dict[str, dict[str, dict]], versions: dict | None 
 
     # OWASP coverage mapping.
     parts.append(render_owasp_coverage_html() + "\n")
+
+    # Limitations — known, accepted boundaries. These bound what the findings
+    # above can support, so they precede the recommendations drawn from them.
+    parts.append("<h2 id='limitations'>Limitations</h2>\n")
+    parts.append("<p>These are known, accepted boundaries of the tool, not defects. "
+                 "They bound what the findings above can support.</p>\n")
+    parts.append("<div class='recs'><ul>\n")
+    for title, body in _limitations(layers):
+        parts.append(f"  <li><strong>{esc(title)}.</strong> {esc(body)}</li>\n")
+    parts.append("</ul></div>\n")
 
     # Recommendations (derived).
     parts.append("<h2>Recommendations</h2>\n<div class='recs'><ol>\n")
