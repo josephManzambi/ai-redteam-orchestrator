@@ -168,14 +168,16 @@ The generated scripts are overwritten on each orchestrator run, so this edit las
 Casts a wide net to find obvious vulnerabilities in the LLM. Independent of which MCP server (if any) is in play.
 
 - **Garak** runs `latentinjection`, `dan`, and `goodside` probes against
-  the target model. The probe list is intentionally focused — the wider
-  set the orchestrator originally shipped (xss, glitch, malwaregen,
-  leakreplay) was renamed or removed in Garak 0.14, and the heaviest
-  remaining family, `promptinject`, is omitted from the default because
-  it consistently times out on a laptop-grade Ollama target. Garak still
-  runs under its own larger timeout budget (see "Per-step timeouts"
-  below). To run the full sweep, re-add `promptinject` to the `probes`
-  variable in `layer1_broad_scan()` and bump the budget further.
+  the target model. The probe list is intentionally focused, for two
+  separate reasons. One probe was **renamed**: `xss` became
+  `web_injection` in Garak 0.14. The rest are **omitted by choice, not
+  because they are gone** — `glitch`, `malwaregen` and `leakreplay` all
+  still exist (verified against Garak 0.17.0) and are dropped as the
+  heaviest or least on-target for this threat model, as is
+  `promptinject`, which consistently times out on a laptop-grade Ollama
+  target. Garak still runs under its own larger timeout budget (see
+  "Per-step timeouts" below). To widen the sweep, add any of them back to
+  the `probes` variable in `layer1_broad_scan()` and bump the budget.
 - **Promptfoo eval** runs four hand-crafted test cases: command injection via `whoami`, path traversal via `../../etc/passwd`, system prompt extraction, and chained translation + injection. The local Ollama model is wired in as the `llm-rubric` grader so no `OPENAI_API_KEY` is required.
 
 ### Layer 2 — Targeted
