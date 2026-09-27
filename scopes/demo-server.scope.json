@@ -1,0 +1,66 @@
+{
+  "schema": "rto/scope/0.1",
+  "note": "Declared intent for the built-in vulnerable demo server. Each capability states what the tool is SUPPOSED to reach; the scanner reports every way the live server exceeds it. Descriptor hashes were pinned from a live tools/list.",
+  "capabilities": [
+    {
+      "capability_id": "demo.read_log",
+      "server": "insecure-system-tools",
+      "tool": "read_log",
+      "purpose": "Read one log file under /var/log.",
+      "descriptor_sha256": "sha256:28fa2933d49014c57191b2d5f248f58a06e80fc67b9380b53ce01d131fcbe798",
+      "reach": {
+        "direction": "read",
+        "data_classes": [
+          "system_logs"
+        ],
+        "external": false,
+        "irreversible": false
+      },
+      "confidentiality": "public",
+      "inputs": {
+        "path": {
+          "pattern": "^(?!/)(?!.*\\.\\.)[A-Za-z0-9._/-]+$"
+        }
+      },
+      "reviewed": true
+    },
+    {
+      "capability_id": "demo.system_diagnostics",
+      "server": "insecure-system-tools",
+      "tool": "system_diagnostics",
+      "purpose": "Run the fixed built-in health check. Takes no input.",
+      "descriptor_sha256": "sha256:e447a8b950ed25e0d09fe8a268186249f4c9e7419057b03e87ff2137aa04530b",
+      "reach": {
+        "direction": "read",
+        "data_classes": [
+          "diagnostics"
+        ],
+        "external": false,
+        "irreversible": false
+      },
+      "confidentiality": "public",
+      "inputs": {},
+      "reviewed": true
+    },
+    {
+      "capability_id": "demo.summarize_note",
+      "server": "insecure-system-tools",
+      "tool": "summarize_note",
+      "purpose": "Summarise a note the user supplies.",
+      "descriptor_sha256": "sha256:8c2c844d7f47526093d45703a4c14fbbb418b962b41ce5882ae66f63d335470c",
+      "reach": {
+        "direction": "read",
+        "data_classes": [
+          "user_text"
+        ],
+        "external": false,
+        "irreversible": false
+      },
+      "confidentiality": "public",
+      "inputs": {
+        "note": {}
+      },
+      "reviewed": true
+    }
+  ]
+}
