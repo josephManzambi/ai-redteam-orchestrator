@@ -86,6 +86,7 @@ uv run redteam_orchestrator.py --demo-vulnerable-server --html
 ```
 usage: redteam_orchestrator.py [-h] [--target TARGET] [--provider PROVIDER]
                                [--timeout TIMEOUT] [--mcp-config MCP_CONFIG]
+                               [--scope FILE] [--scope-init FILE]
                                [--demo-vulnerable-server] [--html]
                                [--no-versions] [--layers LAYERS]
                                [--fresh-pyrit-memory | --no-fresh-pyrit-memory]
@@ -96,6 +97,10 @@ options:
   --provider PROVIDER        LLM provider prefix for Promptfoo (default: ollama)
   --timeout TIMEOUT          Per-step timeout in seconds (default: 3600)
   --mcp-config CONFIG        Path to your MCP client config JSON (Layer 2 descriptor scan)
+  --scope FILE               Check MCP tools against a declared capability scope
+                             (see "Capability scoping"); writes findings.jsonl
+  --scope-init FILE          Write a starting scope pinned to what the servers
+                             expose now (never overwrites)
   --demo-vulnerable-server   Install + target the built-in vulnerable demo (off by default)
   --html                     Also generate a self-contained HTML report
   --no-versions              Skip the tool-version probe in the report header
@@ -345,6 +350,49 @@ uv run redteam_orchestrator.py --mcp-config my_mcp_client.json --layers 2
 
 **Scope:** `--mcp-config` applies to Layer 2 only (the MCP descriptor scan). Layers 1 and 3 test the LLM's general safety posture — prompt injection resistance, jailbreak resilience — independent of which MCP server is in play. To customize Layer 3's attack objectives for your specific tool surface, edit the `_pyrit_crescendo_script()` and `_pyrit_tap_script()` functions in the orchestrator, or run standalone PyRIT scripts.
 
+## Capability scoping
+
+The descriptor scan above flags tool descriptions that *say* something suspicious. It cannot see a tool whose description is innocent but whose interface reaches further than it should. On the built-in demo server it finds one of the three vulnerabilities:
+
+| Tool | Vulnerability | Keyword scan | Scope check |
+|---|---|---|---|
+| `read_log` | path traversal | nothing | `unconstrained-parameter`: "/var/log only" exists only in prose |
+| `system_diagnostics` | command injection | nothing | `undeclared-parameter` (HIGH): `cmd_suffix` was never declared |
+| `summarize_note` | tool poisoning | 2 findings | also `undeclared-parameter` on `sidenote` and `reach-exceeds-scope` |
+
+A scope file declares, per tool, what it is supposed to reach and which inputs it may take. The scanner then reports every gap between that declaration and what the server actually serves:
+
+| Rule | Severity | Meaning |
+|---|---|---|
+| `undeclared-tool` | MEDIUM | the server exposes a tool the scope doesn't declare |
+| `undeclared-parameter` | HIGH if the description routes data into it or its name suggests execution (`cmd`, `script`, `exec`…), else MEDIUM | an input the scope never allowed |
+| `unconstrained-parameter` | MEDIUM | the scope limits an input (`pattern`, `enum`, `maxLength`) but the tool's schema doesn't |
+| `reach-exceeds-scope` | HIGH | the description asks for secrets or execution the capability wasn't granted |
+| `descriptor-changed` | HIGH | name, description or input schema changed since it was pinned (a rug pull) |
+| `declared-but-missing` | INFO | declared, not served |
+
+Run it against the demo:
+
+```bash
+uv run redteam_orchestrator.py --demo-vulnerable-server --layers 2 --scope scopes/demo-server.scope.json
+```
+
+Scope findings join the report with the other Layer 2 findings, and are also written to `findings.jsonl`, one per line, keyed by capability:
+
+```json
+{"schema": "rto/finding/0.1", "capability_id": "demo.system_diagnostics", "server": "insecure-system-tools", "tool": "system_diagnostics", "rule_id": "undeclared-parameter", "severity": "HIGH", "evidence": "cmd_suffix", "source": "descriptor-scan"}
+```
+
+For your own servers, start from what they serve today and tighten it:
+
+```bash
+uv run redteam_orchestrator.py --mcp-config my_mcp_client.json --layers 2 --scope-init my.scope.json
+```
+
+The generated file pins every descriptor and declares every tool and input, so it reports almost nothing until you review it. That is deliberate: a scope is a statement of intent, and only you know the intent. Remove inputs a tool shouldn't need, add `pattern`/`enum`/`maxLength` constraints, set `reach` and `confidentiality` honestly, then set `"reviewed": true`. [`scopes/demo-server.scope.json`](scopes/demo-server.scope.json) is a worked example.
+
+**Limits.** This is a static check of descriptors. It never calls a tool, so it says nothing about what a tool does at runtime: a server can declare a tight schema and still behave badly. `reach-exceeds-scope` matches wording (a fixed list of secret paths and execution terms), so a paraphrase can slip past it. The first pin is trust-on-first-use: it proves a descriptor hasn't changed since you pinned it, not that it was safe when you did.
+
 ## Cleanup
 
 Three tiers, each strictly larger than the last:
@@ -395,6 +443,11 @@ contracts that have actually broken in the wild:
   trimmed Promptfoo / TAP / Garak scopes are pinned so they cannot
   silently re-bloat, and Layer 2 must use the built-in descriptor scan
   (never the unrelated `npx mcp-scan` or the token-gated `snyk-agent-scan`).
+- `test_scope.py` — capability scoping against a captured `tools/list` from
+  the demo server: all three demo vulnerabilities surface (the keyword
+  rules alone find one), rug pulls on the description or the input schema
+  are caught, invalid scope files are rejected with a message naming the
+  problem, and a generated scope stays silent until someone tightens it.
 
 ```bash
 uv run --with pytest --with rich --with "pyrit==0.8.1" pytest tests/ -v
@@ -447,6 +500,14 @@ Likely Promptfoo's generation phase is trying to reach OpenAI instead of Ollama.
 ```
 .
 ├── redteam_orchestrator.py     # the orchestrator (you keep this)
+├── eval_adjudicator.py         # judge calibration: scores judges against labelled anchors
+├── run_eval_tonight.sh         # overnight judge-calibration run
+├── scopes/
+│   └── demo-server.scope.json  # worked capability scope for the demo server
+├── evidence/                   # reproducible evidence for published findings
+├── tests/                      # pytest suite (see "Tests")
+│   └── fixtures/               # captured tools/list output from the demo server
+├── .github/workflows/          # CI: runs the test suite
 ├── LICENSE
 ├── .gitignore
 └── README.md
@@ -459,6 +520,7 @@ Likely Promptfoo's generation phase is trying to reach OpenAI instead of Ollama.
 ├── attack_pyrit_tap.py         # Layer 3 TAP script
 ├── RedTeam_Report.md           # Markdown report
 ├── RedTeam_Report.html         # HTML report (with --html)
+├── findings.jsonl              # scope findings, keyed by capability (with --scope)
 ├── garak_report_l1.*           # Garak output
 └── redteam-output-*.json       # Promptfoo output
 

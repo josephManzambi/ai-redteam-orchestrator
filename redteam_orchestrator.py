@@ -47,6 +47,7 @@ Run:
 
 import argparse
 import datetime
+import hashlib
 import html as html_module
 import json
 import os
@@ -88,6 +89,7 @@ LAYER_TIMEOUTS = {
 }
 
 REPORT_FILE_MD = "RedTeam_Report.md"
+FINDINGS_JSONL = "findings.jsonl"   # scope findings, one per line, keyed by capability
 REPORT_FILE_HTML = "RedTeam_Report.html"
 APP_ID = "ai-sec-audit-001"
 
@@ -108,6 +110,8 @@ class Config:
     html: bool = False
     demo_server: bool = False
     pyrit_memory: str = "n/a"
+    scope: str | None = None        # --scope: declared capabilities to check against
+    scope_init: str | None = None   # --scope-init: write a skeleton scope from the scan
 
 
 cfg = Config()
@@ -583,6 +587,7 @@ def _clean_generated_files() -> None:
         "promptfoo_owasp.json",
         "mcp_scan_client.json",
         "mcp_descriptor_scan.py",
+        FINDINGS_JSONL,
         "attack_pyrit_crescendo.py",
         "attack_pyrit_tap.py",
         REPORT_FILE_MD,
@@ -829,8 +834,22 @@ def _finalize_descriptor_scan(step: dict) -> None:
         step["status"] = "errored"
         step["output"] = "[descriptor scan produced no parseable JSON]\n" + raw
         return
-    report = analyze_tool_descriptors(servers)
+    if cfg.scope_init:
+        if os.path.exists(cfg.scope_init):
+            console.print(f"[yellow]--scope-init: {cfg.scope_init} already exists; "
+                          f"not overwriting.[/yellow]")
+        else:
+            with open(cfg.scope_init, "w", encoding="utf-8") as f:
+                json.dump(init_scope(servers), f, indent=2)
+                f.write("\n")
+            console.print(f"[green]Wrote a starting scope to {cfg.scope_init}. Review it "
+                          f"before relying on it: every capability is reviewed=false.[/green]")
+    scope = load_scope(cfg.scope) if cfg.scope else None
+    report = analyze_tool_descriptors(servers, scope)
     step["output"] = json.dumps(report, indent=2)
+    if scope is not None:
+        with open(FINDINGS_JSONL, "w", encoding="utf-8") as f:
+            f.write(findings_jsonl(report))
 
 
 def layer3_adversarial() -> dict:
@@ -1002,7 +1021,215 @@ def _tool_findings(server: str, tool: dict) -> list[dict]:
     return out
 
 
-def analyze_tool_descriptors(servers: list[dict]) -> dict:
+# ---------- Capability scope: declared reach vs exposed interface ----------
+# The keyword rules above catch descriptions that *say* something suspicious.
+# They cannot see a tool whose description is innocent but whose interface
+# reaches further than it should: the demo server's read_log ("relative to
+# /var/log") takes an unconstrained path, and system_diagnostics ("a custom
+# suffix") takes a raw shell fragment. Neither has a suspicious word in it.
+#
+# A scope file declares, per capability, what the tool is supposed to reach and
+# which inputs it may take. The check below reports every gap between that
+# declaration and what the server actually exposes. It is static: it reads
+# descriptors, never calls a tool, and says nothing about runtime behaviour.
+SCOPE_SCHEMA = "rto/scope/0.1"
+FINDING_SCHEMA = "rto/finding/0.1"
+_SCOPE_DIRECTIONS = ("read", "write", "exec")
+_SCOPE_CONFIDENTIALITY = ("public", "secret")
+# Wording that requests execution. Narrow on purpose: "runs a query" is not a shell.
+_EXEC_REQUEST_TERMS = _CAPABILITY_TERMS + ("shell", "execute", "command line")
+# Undeclared parameters with these names are execution channels, not just clutter.
+_EXEC_PARAM_RE = re.compile(r"(?:^|_)(cmd|command|script|shell|exec|eval|code)(?:_|$)", re.I)
+
+
+def descriptor_hash(tool: dict) -> str:
+    """Stable hash of what an agent sees: name, description and input schema.
+
+    Pin it in the scope file; if the server later serves a different descriptor
+    (a "rug pull": the tool is redefined after it was approved), the hash differs.
+    """
+    canon = json.dumps(
+        {"name": tool.get("name") or "", "description": tool.get("description") or "",
+         "inputSchema": tool.get("inputSchema") or {}},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
+def _tool_params(tool: dict) -> dict:
+    schema = tool.get("inputSchema") or {}
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    return props if isinstance(props, dict) else {}
+
+
+def _line_with(text: str, needle: str, limit: int = 160) -> str:
+    """The line of `text` containing `needle`, for quoting as evidence."""
+    for line in text.splitlines():
+        if needle.lower() in line.lower():
+            line = line.strip()
+            return line if len(line) <= limit else line[: limit - 1] + "…"
+    return needle
+
+
+def load_scope(path: str) -> dict:
+    """Load and validate a scope file. Raises ValueError naming the first problem."""
+    with open(path, encoding="utf-8") as f:
+        try:
+            scope = json.load(f)
+        except ValueError as e:
+            raise ValueError(f"{path}: not valid JSON ({e})") from e
+    if scope.get("schema") != SCOPE_SCHEMA:
+        raise ValueError(f"{path}: 'schema' must be {SCOPE_SCHEMA!r}")
+    caps = scope.get("capabilities")
+    if not isinstance(caps, list):
+        raise ValueError(f"{path}: 'capabilities' must be a list")
+    seen: set[str] = set()
+    for i, c in enumerate(caps):
+        where = f"{path}: capabilities[{i}]"
+        for key in ("capability_id", "server", "tool", "reach", "confidentiality", "inputs"):
+            if key not in c:
+                raise ValueError(f"{where}: missing {key!r}")
+        if c["capability_id"] in seen:
+            raise ValueError(f"{where}: duplicate capability_id {c['capability_id']!r}")
+        seen.add(c["capability_id"])
+        reach = c["reach"]
+        if not isinstance(reach, dict) or reach.get("direction") not in _SCOPE_DIRECTIONS:
+            raise ValueError(f"{where}: reach.direction must be one of {_SCOPE_DIRECTIONS}")
+        for flag in ("external", "irreversible"):
+            if not isinstance(reach.get(flag), bool):
+                raise ValueError(f"{where}: reach.{flag} must be true or false")
+        if c["confidentiality"] not in _SCOPE_CONFIDENTIALITY:
+            raise ValueError(f"{where}: confidentiality must be one of {_SCOPE_CONFIDENTIALITY}")
+        if not isinstance(c["inputs"], dict):
+            raise ValueError(f"{where}: inputs must be an object of parameter -> constraints")
+    return scope
+
+
+def init_scope(servers: list[dict]) -> dict:
+    """A starting scope that pins exactly what the servers expose today.
+
+    Trust-on-first-use: it declares every observed tool and parameter and
+    guesses conservative reach, so it produces no findings until a human
+    tightens it. Every capability is marked reviewed=false for that reason.
+    """
+    caps = []
+    for s in servers:
+        if s.get("status", "ok") != "ok":
+            continue
+        for tool in s.get("tools") or []:
+            caps.append({
+                "capability_id": f"{s.get('name')}.{tool.get('name')}",
+                "server": s.get("name"), "tool": tool.get("name"),
+                "descriptor_sha256": descriptor_hash(tool),
+                "reach": {"direction": "read", "data_classes": [],
+                          "external": True, "irreversible": False},
+                "confidentiality": "public",
+                "inputs": {p: {} for p in _tool_params(tool)},
+                "reviewed": False,
+            })
+    return {"schema": SCOPE_SCHEMA,
+            "note": "Generated from a live scan. Review every capability: declare "
+                    "only the inputs each tool needs, add pattern/enum/maxLength "
+                    "constraints, and set reach honestly. Then set reviewed=true.",
+            "capabilities": caps}
+
+
+def check_scope(servers: list[dict], scope: dict) -> list[dict]:
+    """Findings for every gap between the declared scope and the live descriptors."""
+    caps = {(c["server"], c["tool"]): c for c in scope.get("capabilities", [])}
+    out: list[dict] = []
+
+    def add(server, tool, cap, rule, sev, evidence, why):
+        f = _finding(server, tool, rule, sev, evidence, why)
+        f["capabilityId"] = cap["capability_id"] if cap else None
+        out.append(f)
+
+    present: set[tuple] = set()
+    scanned_ok: set[str] = set()
+    for s in servers:
+        sname = s.get("name") or "?"
+        if s.get("status", "ok") != "ok":
+            continue
+        scanned_ok.add(sname)
+        for tool in s.get("tools") or []:
+            tname = tool.get("name") or ""
+            desc = tool.get("description") or ""
+            low = desc.lower()
+            cap = caps.get((sname, tname))
+            if cap is None:
+                add(sname, tname, None, "undeclared-tool", "MEDIUM", tname,
+                    "Tool is exposed but not declared in the scope file, so nothing "
+                    "bounds what it may reach.")
+                continue
+            present.add((sname, tname))
+
+            pin = cap.get("descriptor_sha256")
+            live = descriptor_hash(tool)
+            if pin and pin != live:
+                add(sname, tname, cap, "descriptor-changed", "HIGH",
+                    f"pinned {pin[:19]}…, served {live[:19]}…",
+                    "The tool's name, description or input schema changed since it "
+                    "was pinned. Re-review before an agent sees it (rug pull).")
+
+            declared = cap.get("inputs") or {}
+            for pname, pschema in _tool_params(tool).items():
+                if pname not in declared:
+                    mentioned = re.search(rf"(?<![A-Za-z0-9_]){re.escape(pname)}(?![A-Za-z0-9_])", desc)
+                    execish = bool(_EXEC_PARAM_RE.search(pname))
+                    add(sname, tname, cap, "undeclared-parameter",
+                        "HIGH" if (mentioned or execish) else "MEDIUM",
+                        _line_with(desc, pname) if mentioned else pname,
+                        f"Parameter '{pname}' is not in the declared inputs"
+                        + (": the description routes data into it, a likely exfiltration channel."
+                           if mentioned else
+                           ": its name suggests an execution channel." if execish else
+                           ": undeclared inputs widen what the tool can be made to do."))
+                    continue
+                want = declared.get(pname) or {}
+                have = pschema if isinstance(pschema, dict) else {}
+                for key in ("pattern", "enum", "maxLength"):
+                    if key in want and key not in have:
+                        add(sname, tname, cap, "unconstrained-parameter", "MEDIUM",
+                            f"{pname}: scope requires {key}={want[key]!r}",
+                            f"The scope limits '{pname}' but the tool's input schema does "
+                            f"not, so the limit exists only in prose.")
+
+            if cap["confidentiality"] != "secret":
+                hit = next((t for t in _EXFIL_TARGETS if t.lower() in low), None)
+                if hit:
+                    add(sname, tname, cap, "reach-exceeds-scope", "HIGH", _line_with(desc, hit),
+                        "The description asks for secret material, but the capability "
+                        "is declared confidentiality=public.")
+            if cap["reach"]["direction"] != "exec":
+                hit = next((t for t in _EXEC_REQUEST_TERMS if t in low), None)
+                if hit:
+                    add(sname, tname, cap, "reach-exceeds-scope", "HIGH", _line_with(desc, hit),
+                        f"The description asks for execution, but the capability is "
+                        f"declared reach.direction={cap['reach']['direction']}.")
+
+    for (sname, tname), cap in caps.items():
+        if sname in scanned_ok and (sname, tname) not in present:
+            add(sname, tname, cap, "declared-but-missing", "INFO", tname,
+                "Declared in the scope but not served. Harmless on its own; a "
+                "renamed tool shows up here and as undeclared-tool.")
+    return out
+
+
+def findings_jsonl(report: dict) -> str:
+    """Scope findings, one JSON object per line, keyed by capability id."""
+    lines = []
+    for f in report.get("findings", []):
+        if "capabilityId" not in f:
+            continue
+        lines.append(json.dumps({
+            "schema": FINDING_SCHEMA, "capability_id": f["capabilityId"],
+            "server": f["server"], "tool": f["tool"], "rule_id": f["ruleId"],
+            "severity": f["severity"], "evidence": f["evidence"],
+            "source": "descriptor-scan",
+        }, ensure_ascii=False))
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def analyze_tool_descriptors(servers: list[dict], scope: dict | None = None) -> dict:
     """Grade a list of introspected servers into a findings report.
 
     `servers` is the introspection output: a list of
@@ -1030,6 +1257,9 @@ def analyze_tool_descriptors(servers: list[dict]) -> dict:
                 f"Tool name '{tname}' is exposed by multiple servers ({joined}) — "
                 "a shadowing/override risk."))
 
+    if scope is not None:
+        findings.extend(check_scope(servers, scope))
+
     counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     for f in findings:
         counts[f["severity"].lower()] = counts.get(f["severity"].lower(), 0) + 1
@@ -1050,6 +1280,9 @@ def analyze_tool_descriptors(servers: list[dict]) -> dict:
         "mediumCount": counts["medium"],
         "lowCount": counts["low"],
         "infoCount": counts["info"],
+        "scope": ({"schema": scope.get("schema"),
+                   "capabilities": len(scope.get("capabilities", []))}
+                  if scope is not None else None),
     }
 
 
@@ -2150,6 +2383,13 @@ def main() -> int:
                              "1 and 3 test the LLM's general safety posture regardless. "
                              "If omitted and --demo-vulnerable-server is not set, the "
                              "descriptor scan is skipped.")
+    parser.add_argument("--scope", default=None, metavar="FILE",
+                        help="Check MCP tools against a declared capability scope "
+                             "(see scopes/demo-server.scope.json). Adds scope findings "
+                             "to the report and writes findings.jsonl.")
+    parser.add_argument("--scope-init", default=None, metavar="FILE",
+                        help="Write a starting scope pinned to what the MCP servers "
+                             "expose now. Never overwrites an existing file.")
     parser.add_argument("--demo-vulnerable-server", action="store_true",
                         help="Install and target the built-in deliberately-vulnerable "
                              "MCP demo server. WARNING: contains real command injection "
@@ -2189,6 +2429,14 @@ def main() -> int:
     cfg.timeout = args.timeout
     cfg.html = args.html
     cfg.demo_server = args.demo_vulnerable_server
+    if args.scope:
+        try:
+            load_scope(args.scope)   # fail fast, before any layer runs
+        except (OSError, ValueError) as e:
+            console.print(f"[bold red]Error:[/bold red] --scope: {e}")
+            sys.exit(2)
+        cfg.scope = args.scope
+    cfg.scope_init = args.scope_init
     if args.mcp_config and args.demo_vulnerable_server:
         console.print("[bold red]Error:[/bold red] --mcp-config and "
                       "--demo-vulnerable-server are mutually exclusive.")

@@ -33,3 +33,6 @@ report_llama.md
 report_live_qwen.md
 eval_night.log
 live_audit.log
+
+# Capability scope findings (generated with --scope)
+findings.jsonl
