@@ -1,8 +1,8 @@
 # 🛡️ AI Red Team Orchestrator
 
-A single-file, three-layer automated red-team pipeline for auditing LLMs and MCP tool servers. Its three-layer structure follows the Garak → Promptfoo → PyRIT layering described by [Amine Raji](https://aminrj.com/posts/attack-patterns-red-teaming/); the layer concept and tool mapping are his, while the orchestration, severity classification, reporting, timeout/exit-code/CI design, probe and preset selection are this project's own. Runs entirely locally against [Ollama](https://ollama.com), using [`uv`](https://docs.astral.sh/uv/) for zero-config dependency management.
+A single-file, three-layer automated red-team pipeline for auditing LLMs and MCP tool servers. Its three-layer structure follows the Garak → Promptfoo → PyRIT layering described by [Amine Raji](https://aminrj.com/posts/attack-patterns-red-teaming/); the layer concept and tool mapping are his, while the orchestration, severity classification, reporting, timeout/exit-code/CI design, probe and preset selection are this project's own. Runs against local models through [Ollama](https://ollama.com), with no API keys, using [`uv`](https://docs.astral.sh/uv/) for zero-config dependency management. One step, the Promptfoo OWASP preset in Layer 2, relies on Promptfoo's hosted test-case generator and is skipped unless you run `promptfoo auth login` ([#31](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/31)).
 
-Point it at your own MCP server and the orchestrator throws four industry-standard attack frameworks at it:
+Point it at your own MCP server and the orchestrator runs three attack frameworks (Garak, Promptfoo, PyRIT) and a built-in MCP descriptor scan against it:
 
 | Layer | Purpose | Tools |
 |---|---|---|
@@ -25,7 +25,7 @@ Output is a Markdown report (and optionally a self-contained HTML report) with s
 Most red-team workflows require stitching together 3–4 tools manually, each with their own config format, Python version, and install dance. This script:
 
 - **One file, zero setup** — `uv run` handles all dependencies automatically
-- **Runs fully local** — Ollama target, no API keys needed
+- **Runs against a local model**: Ollama target, no API keys needed (the Promptfoo OWASP preset needs a free `promptfoo auth login`, see [#31](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/31))
 - **Brings your own MCP server** — point Layer 2's descriptor scan at your real server with `--mcp-config`
 - **Optional vulnerable demo target** — opt in with `--demo-vulnerable-server` if you want something to find out of the box (off by default)
 - **Covers breadth and depth** — broad scanning (Garak), targeted taxonomies (OWASP), and adversarial multi-turn attacks (PyRIT) in one run
@@ -199,7 +199,9 @@ Tests against known vulnerability taxonomies and audits the MCP tool surface.
   budget (see "Per-step timeouts" below). For a wider audit, edit
   `_promptfoo_owasp_config()` and pass `--timeout 14400` or higher. The
   trim is pinned by `tests/test_generated_artifacts.py` so it cannot
-  silently re-bloat.
+  silently re-bloat. Promptfoo's test-case generator is a hosted feature:
+  without `promptfoo auth login` this step is skipped and the report says
+  so ([#31](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/31)).
 - **MCP descriptor scan** (built-in) connects to the server over stdio, pulls
   its `tools/list`, and statically audits each tool descriptor for tool
   poisoning (hidden instructions in descriptions), data-exfiltration cues,
@@ -360,7 +362,7 @@ The descriptor scan above flags tool descriptions that *say* something suspiciou
 | `system_diagnostics` | command injection | nothing | `undeclared-parameter` (HIGH): `cmd_suffix` was never declared |
 | `summarize_note` | tool poisoning | 2 findings | also `undeclared-parameter` on `sidenote` and `reach-exceeds-scope` |
 
-A scope file declares, per tool, what it is supposed to reach and which inputs it may take. The scanner then reports every gap between that declaration and what the server actually serves:
+A scope file declares, per tool, what it is supposed to reach and which inputs it may take. The scanner then reports the gaps its rules check for between that declaration and what the server actually serves:
 
 | Rule | Severity | Meaning |
 |---|---|---|
