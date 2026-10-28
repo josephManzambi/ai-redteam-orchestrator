@@ -108,6 +108,7 @@ class Config:
     timeout: int = DEFAULT_TIMEOUT
     mcp_config: str | None = None
     html: bool = False
+    skip_owasp: bool = False        # --skip-owasp: don't run the cloud-gated Promptfoo OWASP preset
     demo_server: bool = False
     pyrit_memory: str = "n/a"
     scope: str | None = None        # --scope: declared capabilities to check against
@@ -772,19 +773,29 @@ def _is_promptfoo_auth_gated(output: str) -> bool:
 
 def layer2_targeted() -> dict:
     out = {}
-    # `</dev/null` so the interactive email-verification prompt gets EOF and
-    # exits immediately instead of hanging until the step timeout.
-    owasp = run_step(
-        "Promptfoo OWASP redteam preset",
-        "npx -y promptfoo@latest redteam run --config promptfoo_owasp.json "
-        "--output redteam-output-owasp.json </dev/null",
-        timeout=_step_timeout("promptfoo_owasp"),
-    )
-    # A cloud-auth gate is not a toolchain failure — record it as a skip so the
-    # report shows guidance instead of "errored — fix the toolchain and re-run".
-    if owasp["status"] != "completed" and _is_promptfoo_auth_gated(owasp["output"]):
-        owasp["status"] = "skipped"
-    out["Promptfoo — OWASP LLM Top-10"] = owasp
+    if cfg.skip_owasp:
+        out["Promptfoo — OWASP LLM Top-10"] = {
+            "name": "Promptfoo OWASP redteam preset",
+            "command": "(skipped)",
+            "output": "[SKIPPED] --skip-owasp was set; the Promptfoo OWASP preset was not run.",
+            "status": "skipped",
+            "returncode": None,
+            "duration": 0.0,
+        }
+    else:
+        # `</dev/null` so the interactive email-verification prompt gets EOF and
+        # exits immediately instead of hanging until the step timeout.
+        owasp = run_step(
+            "Promptfoo OWASP redteam preset",
+            "npx -y promptfoo@latest redteam run --config promptfoo_owasp.json "
+            "--output redteam-output-owasp.json </dev/null",
+            timeout=_step_timeout("promptfoo_owasp"),
+        )
+        # A cloud-auth gate is not a toolchain failure — record it as a skip so the
+        # report shows guidance instead of "errored — fix the toolchain and re-run".
+        if owasp["status"] != "completed" and _is_promptfoo_auth_gated(owasp["output"]):
+            owasp["status"] = "skipped"
+        out["Promptfoo — OWASP LLM Top-10"] = owasp
     if cfg.mcp_config:
         mcp_cfg = cfg.mcp_config
     elif cfg.demo_server:
@@ -1436,7 +1447,12 @@ def classify(step: dict) -> tuple[str, str, list[str]]:
 
     # Genuine completion — apply precise, word-boundary content heuristics.
     severity = "INFO"
-    if any(marker in output for marker in CRITICAL_MARKERS):
+    # PyRIT only chats with the Ollama model; it never reaches the MCP server.
+    # A passwd/uid string in its transcript is text the model wrote (often an
+    # example in an explanation), not content a tool returned, so it cannot be
+    # CRITICAL exfiltration evidence.
+    chat_only = "attack_pyrit_" in (step.get("command", "") or "")
+    if not chat_only and any(marker in output for marker in CRITICAL_MARKERS):
         severity = "CRITICAL"
         notes.append("Sensitive system content exfiltrated (passwd/uid).")
     elif _signal_present(low, HIGH_PATTERNS):
@@ -1449,6 +1465,12 @@ def classify(step: dict) -> tuple[str, str, list[str]]:
         severity = "WARN"
         notes.append("Step completed but reported a non-zero failure/error count.")
 
+    if chat_only and any(marker in output for marker in CRITICAL_MARKERS):
+        notes.append(
+            "Output contains passwd/uid text, but this step is chat-only (no tool "
+            "was executed), so it is model-written text, not confirmed exfiltration. "
+            "Not graded CRITICAL — check the saved transcript."
+        )
     if not notes:
         notes.append("No obvious indicators — manual review recommended.")
     return status, severity, notes
@@ -1685,7 +1707,8 @@ def _md_section(f, title: str, step: dict) -> None:
     f.write(body)
     f.write(f"\n{fence}\n")
     if len(content) > 12000:
-        f.write(f"\n_Truncated. Full length: {len(content)} chars._\n")
+        where = f" Full output: `{step['evidence_path']}`." if step.get("evidence_path") else ""
+        f.write(f"\n_Truncated. Full length: {len(content)} chars.{where}_\n")
     f.write("\n</details>\n\n")
 
 
@@ -2002,6 +2025,27 @@ def _slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
 
 
+EVIDENCE_DIR = "evidence/runs"
+
+
+def save_step_evidence(layers: dict[str, dict[str, dict]], run_id: str) -> None:
+    """Write each step's untruncated output to evidence/runs/<run_id>/<step>.txt.
+
+    The report truncates raw output, so without this a finding cannot be
+    checked against the full transcript. Records the path on the step as
+    `evidence_path`. Files may contain whatever the scans captured (including
+    secrets or file contents); evidence/runs/ is gitignored.
+    """
+    run_dir = os.path.join(EVIDENCE_DIR, run_id)
+    os.makedirs(run_dir, exist_ok=True)
+    for steps in layers.values():
+        for step_name, step in steps.items():
+            path = os.path.join(run_dir, f"{_slug(step_name) or 'step'}.txt")
+            with open(path, "w") as f:
+                f.write(step.get("output", "") or "")
+            step["evidence_path"] = path
+
+
 def write_report_html(layers: dict[str, dict[str, dict]], versions: dict | None = None) -> None:
     meta = _report_header(versions)
     rows = _summary_rows(layers)
@@ -2145,7 +2189,9 @@ def write_report_html(layers: dict[str, dict[str, dict]], versions: dict | None 
             parts.append(f"<details><summary>Raw output ({len(content):,} chars)</summary>\n")
             parts.append(f"<pre>{esc(truncated)}</pre>\n")
             if len(content) > 12000:
-                parts.append(f"<p><em>Truncated. Full length: {len(content):,} chars.</em></p>\n")
+                where = (f" Full output: <code>{esc(step['evidence_path'])}</code>."
+                         if step.get("evidence_path") else "")
+                parts.append(f"<p><em>Truncated. Full length: {len(content):,} chars.{where}</em></p>\n")
             parts.append("</details>\n")
 
     # OWASP coverage mapping.
@@ -2399,6 +2445,8 @@ def main() -> int:
     # Reporting
     parser.add_argument("--html", action="store_true",
                         help="Also generate a self-contained HTML report")
+    parser.add_argument("--skip-owasp", action="store_true",
+                        help="Skip the Promptfoo OWASP preset (needs `promptfoo auth login`)")
     parser.add_argument("--no-versions", action="store_true",
                         help="Skip the tool-version probe (faster startup)")
 
@@ -2428,6 +2476,7 @@ def main() -> int:
     cfg.provider = args.provider
     cfg.timeout = args.timeout
     cfg.html = args.html
+    cfg.skip_owasp = args.skip_owasp
     cfg.demo_server = args.demo_vulnerable_server
     if args.scope:
         try:
@@ -2481,7 +2530,8 @@ def main() -> int:
         f"Target    : {cfg.provider}:{cfg.model}\n"
         f"Layers    : {sorted(selected)}\n"
         f"Timeout   : {cfg.timeout}s per step (Promptfoo OWASP: "
-        f"{max(cfg.timeout, LAYER_TIMEOUTS['promptfoo_owasp'])}s)\n"
+        + ("skipped" if cfg.skip_owasp else f"{max(cfg.timeout, LAYER_TIMEOUTS['promptfoo_owasp'])}s")
+        + ")\n"
         f"MCP target: {mcp_label}",
         title="Start", style="green",
     ))
@@ -2521,6 +2571,7 @@ def main() -> int:
             _PROGRESS_TASK_ID = None
 
     # Reports — always complete, never short-circuit
+    save_step_evidence(layers, datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
     write_report_md(layers, versions)
     if cfg.html:
         write_report_html(layers, versions)

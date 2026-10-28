@@ -36,3 +36,6 @@ live_audit.log
 
 # Capability scope findings (generated with --scope)
 findings.jsonl
+
+# Raw per-run step output (may contain secrets captured by the scans)
+evidence/runs/
