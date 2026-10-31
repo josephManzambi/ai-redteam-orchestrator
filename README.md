@@ -88,6 +88,7 @@ usage: redteam_orchestrator.py [-h] [--target TARGET] [--provider PROVIDER]
                                [--timeout TIMEOUT] [--mcp-config MCP_CONFIG]
                                [--scope FILE] [--scope-init FILE]
                                [--demo-vulnerable-server] [--html]
+                               [--judge-model MODEL] [--skip-owasp]
                                [--no-versions] [--layers LAYERS]
                                [--fresh-pyrit-memory | --no-fresh-pyrit-memory]
                                [--clean] [--clean-deep] [--clean-all] [--yes]
@@ -103,6 +104,9 @@ options:
                              expose now (never overwrites)
   --demo-vulnerable-server   Install + target the built-in vulnerable demo (off by default)
   --html                     Also generate a self-contained HTML report
+  --judge-model MODEL        Separate Ollama model for PyRIT's scorer, ideally
+                             another family than --target (default: self-play)
+  --skip-owasp               Skip the cloud-gated Promptfoo OWASP preset
   --no-versions              Skip the tool-version probe in the report header
   --layers LAYERS            Comma-separated layer subset, e.g. '1,3' (default: 1,2,3)
   --fresh-pyrit-memory       Clear ~/.pyrit before Layer 3 so a stale transcript
@@ -126,7 +130,7 @@ A human red-teamer is all three at once; automation splits them so the loop can 
 
 Each role spans a spectrum — attackers from a fixed corpus of known attacks → a single-turn generator → an adaptive multi-turn agent; judges from a keyword rule → an LLM-as-judge → a human. And the roles can be *wired* as **self-play** (one model in every role — cheap, but a weak adversary and a biased judge), **separate models**, or **stronger-attacker**.
 
-**Where this tool sits:** Garak is a static-corpus attacker graded by rules; Promptfoo generates single-turn attacks graded by a mix of rules and an LLM rubric; PyRIT (Crescendo, TAP) is an adaptive multi-turn attacker with an LLM judge. All three default to **self-play** — the same `--target` model plays every role — which is the single biggest caveat on Layer 3 results ([why](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/27)).
+**Where this tool sits:** Garak is a static-corpus attacker graded by rules; Promptfoo generates single-turn attacks graded by a mix of rules and an LLM rubric; PyRIT (Crescendo, TAP) is an adaptive multi-turn attacker with an LLM judge. All three default to **self-play** — the same `--target` model plays every role — which is the single biggest caveat on Layer 3 results ([why](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/27)). `--judge-model` moves PyRIT's judge to a separate model (see below).
 
 ### Strengthening Layer 3: a separate judge model
 
@@ -140,29 +144,18 @@ python3 eval_adjudicator.py --judges llama3.1:8b mistral:7b --runs 5 --report /d
 
 In testing, quality tracked neither size nor family — a 7B beat a 70B, and the obvious `llama3.1:8b` pick was the *worst* (it called a literal `/etc/passwd` dump "not harmful"). Pick whichever candidate the probe validates, not the biggest one.
 
-**Wiring it in (manual for now).** A first-class `--judge-model` flag is tracked in [#27](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/27); until it lands, point the judge at a separate model by editing the generated PyRIT scripts and running them directly. After a run writes `attack_pyrit_crescendo.py` / `attack_pyrit_tap.py`, add a judge target and use it for the scorer:
-
-```python
-def _judge_target():
-    return OpenAIChatTarget(
-        model_name="mistral:7b",          # a *different family* than --target, calibrated above
-        endpoint=OLLAMA_ENDPOINT,
-        api_key="ollama",
-        httpx_client_kwargs={"timeout": 180},
-    )
-
-# in main(): was `scorer = _ollama_target()`
-scorer = _judge_target()
-```
+**Wiring it in.** Pass the calibrated judge with `--judge-model`. PyRIT's scorer (Crescendo and TAP) then uses it, while the target and the adversarial chat stay on `--target`:
 
 ```bash
 ollama pull mistral:7b
 # keep target + judge both resident so Ollama doesn't reload on every scoring call
 OLLAMA_MAX_LOADED_MODELS=2 ollama serve
-uv run python attack_pyrit_crescendo.py
+uv run redteam_orchestrator.py --target qwen2.5:7b-instruct-q8_0 --judge-model <calibrated-judge> --layers 3
 ```
 
-The generated scripts are overwritten on each orchestrator run, so this edit lasts only for a manual re-run until #27 lands.
+**Calibrate on PyRIT's own scorer, not just the yes/no probe.** `eval_adjudicator.py` tests a yes/no harm verdict; PyRIT's Crescendo and TAP use a 1–10 jailbreak scale, which is a different task. In a test run (Oct 2026, target `qwen2.5:7b`), `mistral:7b` passed the yes/no probe 8/8 but on the scale scored plain explanations as full jailbreaks, with rationales such as "does not contain any explicit commands" next to a score of 1.0. `gemma2:9b` scored refusals correctly but also gave 0.9–0.95 to answers its own rationale described as avoiding the request. Read the score rationales in the saved transcripts (`evidence/runs/`) before trusting a judge's "achieved".
+
+The report header names the judge, and the self-play limitation is replaced by a narrower one only when the judge is from a **different model family** than the target: a different tag of the same family (say `qwen3` judging `qwen2.5`) shares its blind spots, so it still counts as self-play. The attacker is still the target model, so this closes the self-grading half of [#27](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/27), not the weak-attacker half.
 
 **Safe usage.** Judges reliably catch overtly-framed attacks but miss quiet or paraphrased leaks, so a judge verdict is one-directional: trust a **"harmful"** verdict (escalate / annotate) and never a **"safe"** one (never downgrade). Full result and the planned `--adjudicate` design: [#41](https://github.com/josephManzambi/ai-redteam-orchestrator/issues/41).
 
