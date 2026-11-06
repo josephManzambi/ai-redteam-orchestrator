@@ -154,3 +154,10 @@ def test_generated_descriptor_scan_parses_and_introspects(orchestrator):
     ast.parse(src)  # raises SyntaxError on template drift
     for symbol in ("stdio_client", "ClientSession", "list_tools", "initialize"):
         assert symbol in src, f"introspection script must reference {symbol}"
+
+
+def test_mcp_scan_script_pins_the_sdk_major(orchestrator):
+    # mcp 2.x renamed Tool.inputSchema, which silently emptied every schema:
+    # false rug-pull alarms on each tool and no parameter findings at all.
+    header = orchestrator._mcp_descriptor_scan_script().split("# ///")[1]
+    assert '"mcp<2"' in header
