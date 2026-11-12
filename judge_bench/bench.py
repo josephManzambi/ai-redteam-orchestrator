@@ -129,13 +129,14 @@ def metrics(rows: list[dict], key: str) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--judges", nargs="+", required=True)
+    ap.add_argument("--cases", default=str(HERE / "labeled_turns.jsonl"))
     ap.add_argument("--out", default=str(HERE / "results.csv"))
     args = ap.parse_args()
 
     from pyrit.common import IN_MEMORY, initialize_pyrit
     initialize_pyrit(memory_db_type=IN_MEMORY)
 
-    cases = [json.loads(l) for l in open(HERE / "labeled_turns.jsonl")]
+    cases = [json.loads(l) for l in open(args.cases)]
     fields = ["judge", "id", "label", "scale_score", "scale", "grounded", "ungrounded_yes",
               "rules", "seconds"]
     out = Path(args.out)
