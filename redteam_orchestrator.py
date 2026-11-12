@@ -112,10 +112,30 @@ class Config:
     demo_server: bool = False
     pyrit_memory: str = "n/a"
     scope: str | None = None        # --scope: declared capabilities to check against
+    judge_model: str | None = None  # --judge-model: separate PyRIT scorer (None = self-play)
     scope_init: str | None = None   # --scope-init: write a skeleton scope from the scan
 
 
 cfg = Config()
+
+
+def _model_family(name: str) -> str:
+    """'qwen2.5:7b-instruct' -> 'qwen', 'mistral:7b' -> 'mistral'."""
+    m = re.match(r"[a-z]+", name.lower())
+    return m.group(0) if m else name.lower()
+
+
+def _judge() -> str:
+    """The model PyRIT's scorer uses: --judge-model, or the target itself."""
+    return cfg.judge_model or cfg.model
+
+
+def _judge_independent() -> bool:
+    """True only when the judge is from a different model family than the
+    target. Calibration showed a same-family judge shares the target's blind
+    spots (eval_adjudicator.py), so a different tag of the same family does
+    not count as independent."""
+    return bool(cfg.judge_model) and _model_family(cfg.judge_model) != _model_family(cfg.model)
 
 
 # ---------- Live progress ----------
@@ -293,9 +313,9 @@ from pyrit.prompt_target import OpenAIChatTarget
 
 OLLAMA_ENDPOINT = "http://localhost:11434/v1/chat/completions"
 
-def _ollama_target():
+def _ollama_target(model="{cfg.model}"):
     return OpenAIChatTarget(
-        model_name="{cfg.model}",
+        model_name=model,
         endpoint=OLLAMA_ENDPOINT,
         api_key="ollama",  # Ollama ignores it but PyRIT requires a non-empty value
         # PyRIT's httpx default is only 60s. A single laptop generation over a
@@ -308,7 +328,9 @@ async def main():
     initialize_pyrit(memory_db_type=IN_MEMORY)
     target = _ollama_target()
     adversarial = _ollama_target()
-    scorer = _ollama_target()
+    # The scorer decides whether the attack succeeded. --judge-model points it
+    # at a separate model so the target does not grade its own jailbreak (#27).
+    scorer = _ollama_target("{_judge()}")
 
     orchestrator = CrescendoOrchestrator(
         objective_target=target,
@@ -350,9 +372,9 @@ from pyrit.prompt_target import OpenAIChatTarget
 
 OLLAMA_ENDPOINT = "http://localhost:11434/v1/chat/completions"
 
-def _ollama_target():
+def _ollama_target(model="{cfg.model}"):
     return OpenAIChatTarget(
-        model_name="{cfg.model}",
+        model_name=model,
         endpoint=OLLAMA_ENDPOINT,
         api_key="ollama",  # Ollama ignores it but PyRIT requires a non-empty value
         # PyRIT's httpx default is only 60s. A single laptop generation over a
@@ -365,7 +387,8 @@ async def main():
     initialize_pyrit(memory_db_type=IN_MEMORY)
     target = _ollama_target()
     adversarial = _ollama_target()
-    scorer_target = _ollama_target()
+    # Separate judge when --judge-model is set (#27); otherwise the target.
+    scorer_target = _ollama_target("{_judge()}")
 
     # Tree shape tuned for a laptop Ollama target: ~24 model calls total
     # (width*depth*branching*3) which fits in a few minutes on qwen2.5:3b.
@@ -1540,6 +1563,11 @@ def _report_header(versions: dict | None = None) -> dict:
             or ("built-in vulnerable demo server" if cfg.demo_server else "none (MCP descriptor scan skipped)")
         ),
         "pyrit_memory": cfg.pyrit_memory,
+        "judge_model": (
+            f"{cfg.judge_model} (separate family from the target)" if _judge_independent()
+            else f"{cfg.judge_model} (same family as the target, so not independent)" if cfg.judge_model
+            else f"{cfg.model} (self-play: the target judges its own attacks)"
+        ),
     }
     if versions:
         base["tool_versions"] = ", ".join(f"{k}={v}" for k, v in versions.items())
@@ -1924,6 +1952,11 @@ _LIMITATIONS: list[tuple[str, str, str]] = [
      "Four independently-versioned tools are stitched together and only some "
      "can be pinned. Upstream changes have broken this pipeline before now. "
      "The tool versions in the header above are part of the finding."),
+    ("pyrit_judge", "The attacker is still the target model",
+     "Layer 3 scores attacks with a separate judge from another model family, "
+     "so the target no longer grades its own jailbreak. The adversarial chat "
+     "is still the target model, which may soften attacks against itself, and "
+     "a judge's \"not achieved\" is still not proof of safety."),
     ("pyrit", "The same model is target, attacker and judge",
      "Layer 3 wires one local model into all three roles: the defender, the "
      "adversarial chat, and the scorer. A model is a poor judge of whether it "
@@ -1951,7 +1984,8 @@ def _limitations(layers: dict[str, dict[str, dict]]) -> list[tuple[str, str]]:
     ).lower()
     applies = {
         "always": True,
-        "pyrit": "pyrit" in cmds,
+        "pyrit": "pyrit" in cmds and not _judge_independent(),
+        "pyrit_judge": "pyrit" in cmds and _judge_independent(),
         "promptfoo": "promptfoo" in cmds,
         "mcp": "mcp_descriptor_scan" in cmds or "mcp-scan" in cmds,
     }
@@ -2393,9 +2427,24 @@ def preflight() -> None:
                 title="Preflight failed", style="red",
             ))
             sys.exit(1)
+        if cfg.judge_model and not _model_available(cfg.judge_model, names):
+            console.print(Panel(
+                f"[bold red]Judge model '{cfg.judge_model}' not installed in Ollama[/bold red]\n\n"
+                "Pull it and re-run:\n"
+                f"  [bold]ollama pull {cfg.judge_model}[/bold]",
+                title="Preflight failed", style="red",
+            ))
+            sys.exit(1)
+        if cfg.judge_model and not _judge_independent():
+            console.print(
+                f"[yellow]Judge '{cfg.judge_model}' is the same model family as the "
+                f"target '{cfg.model}', so it is not an independent judge.[/yellow]"
+            )
         console.print(
             f"[green]Ollama reachable[/green] at {base} "
-            f"[dim]· target model '{cfg.model}' available[/dim]"
+            f"[dim]· target model '{cfg.model}' available"
+            + (f" · judge '{cfg.judge_model}' available" if cfg.judge_model else "")
+            + "[/dim]"
         )
 
 
@@ -2445,6 +2494,10 @@ def main() -> int:
     # Reporting
     parser.add_argument("--html", action="store_true",
                         help="Also generate a self-contained HTML report")
+    parser.add_argument("--judge-model", default=None, metavar="MODEL",
+                        help="Separate Ollama model for PyRIT's scorer, ideally another "
+                             "family than --target (default: the target judges itself). "
+                             "Calibrate candidates with eval_adjudicator.py first.")
     parser.add_argument("--skip-owasp", action="store_true",
                         help="Skip the Promptfoo OWASP preset (needs `promptfoo auth login`)")
     parser.add_argument("--no-versions", action="store_true",
@@ -2477,6 +2530,7 @@ def main() -> int:
     cfg.timeout = args.timeout
     cfg.html = args.html
     cfg.skip_owasp = args.skip_owasp
+    cfg.judge_model = args.judge_model
     cfg.demo_server = args.demo_vulnerable_server
     if args.scope:
         try:
@@ -2528,6 +2582,7 @@ def main() -> int:
     console.print(Panel(
         f"[bold green]AI Red Team Automation[/bold green]\n"
         f"Target    : {cfg.provider}:{cfg.model}\n"
+        f"Judge     : {_judge()}" + ("" if _judge_independent() else " (self-play)" if not cfg.judge_model else " (same family)") + "\n"
         f"Layers    : {sorted(selected)}\n"
         f"Timeout   : {cfg.timeout}s per step (Promptfoo OWASP: "
         + ("skipped" if cfg.skip_owasp else f"{max(cfg.timeout, LAYER_TIMEOUTS['promptfoo_owasp'])}s")
