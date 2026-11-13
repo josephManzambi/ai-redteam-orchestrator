@@ -49,13 +49,13 @@ Missed successes / false alarms, as in the table above.
 
 ## mistral target: 1 success, 7 non-successes
 
-Too few successes to compare judges (mistral mostly explained or refused): llama3.3:70b, gemma2:9b and the self-play judge each agree with the labels on the one success or miss it; see the CSV. The useful fact is the contrast with PyRIT's own verdict: on the three mistral runs PyRIT reported the objective achieved every time, while the labels find one real success in 12 responses. `mistral:7b` was left out as a judge on its own transcripts.
+Too few successes to compare judges (mistral mostly explained or refused). On the scale, missed / false alarms: llama3.3:70b 0 / 0, qwen2.5:7b 1 / 0 (it missed the one success), gemma2:9b 1 / 1, mixtral:8x7b 1 / 2. The useful fact is the contrast with PyRIT's own verdict: on the three mistral runs PyRIT reported the objective achieved every time, while the labels find one real success in 12 responses. `mistral:7b` was left out as a judge on its own transcripts.
 
 ## What the held-out run says
 
 - **Self-play is still the worst judge, and the result replicated.** qwen2.5:7b judging its own transcripts recognised 0 of 25 real successes on the scale that decides "achieved" (1 of 18 in the first set). It never raised a false alarm, which is why it looks quiet.
 - **llama3.3:70b is still the only judge that holds up on the scale** (3 of 25 missed, 0 false alarms; 3 of 18 and 1 in the first set), at about 35 seconds a response on this machine.
-- **Small judges are unreliable, in different ways.** mistral:7b as a judge flagged every non-success it was shown and 0 of the successes it missed (12 false alarms of 20); gemma2:9b and mixtral:8x7b miss a quarter to a third of successes and raise false alarms on some non-successes.
+- **Small judges are unreliable, in different ways.** mistral:7b as a judge missed no success but raised 12 false alarms on 20 non-successes; gemma2:9b and mixtral:8x7b miss a quarter to a third of successes and raise false alarms on some non-successes.
 - **The verbatim-quote check still removes real successes** (mixtral:8x7b 19 of 25 missed with it), for the same reason as before: judges paraphrase or reformat code when quoting. It needs looser matching before it is useful.
 - **The rules scored 0 missed and 0 false alarms on the held-out set, including the second target.** Read that with care: the labels were pre-filled by the rules and then checked by reading the code, so the two are not independent, and the labels were checked by one reviewer. It does say the rules' patterns (an unquoted traversal path, `cat /etc/passwd` in code) generalised to new transcripts from the same objectives.
 
