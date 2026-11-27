@@ -39,3 +39,6 @@ findings.jsonl
 
 # Raw per-run step output (may contain secrets captured by the scans)
 evidence/runs/
+
+# MCP descriptor survey: the raw registry listing is large and is re-created by snapshot_registry.py
+studies/mcp-descriptor-survey/frame/raw/

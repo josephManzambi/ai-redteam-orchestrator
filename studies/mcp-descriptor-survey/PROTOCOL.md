@@ -1,6 +1,6 @@
 # MCP descriptor survey: study protocol
 
-**Status: pre-registration draft, decisions 1 to 3 settled on 14 November 2026. Nothing has been collected and no sample has been drawn.** This file is committed before any data is gathered, so the questions, the sample, the rules and the analysis are fixed first and anything that changes later is visible in git history. Two decisions are still open (the second labeller and the reviewer, see the end); the protocol is not tagged, and the sample is not drawn, until a reviewer is named.
+**Status: pre-registration draft, decisions 1 to 3 settled on 14 November 2026, amended on 27 November 2026 (see Amendments). Nothing has been collected and no sample has been drawn.** This file is committed before any data is gathered, so the questions, the sample, the rules and the analysis are fixed first and anything that changes later is visible in git history. Two decisions are still open (the second labeller and the reviewer, see the end); the protocol is not tagged, and the sample is not drawn, until a reviewer is named.
 
 ## Why this study
 
@@ -21,10 +21,10 @@ H1 to H3 are tested on the held-out half; H4 is a separate longitudinal measurem
 ## Design
 
 ### Sampling frame
-Servers listed in the official MCP Registry (`registry.modelcontextprotocol.io`) at a fixed snapshot date, which have a public GitHub repository and an npm or PyPI package. The snapshot used is the one recorded in `FRAME-CHECK.md` (SHA-256 `eced3ccbc61f1c99324244b2b8722ab1990757a2b403acab076172bae1c9def2`): 20,289 such entries across 17,232 distinct repositories. The registry only: servers outside it are out of scope. Exclusion: archived repositories, forks that only mirror another listed server, and the author's own projects. The snapshot of the registry listing is committed (names, versions, repository URLs, a SHA-256 of the file), so the frame can be reconstructed.
+Servers listed in the official MCP Registry (`registry.modelcontextprotocol.io`) at a fixed snapshot date, which have a public GitHub repository and an npm or PyPI package. The snapshot used is the one taken on 27 November 2026 and committed as `frame/registry-latest-2026-11-27.jsonl.gz` (SHA-256 of its content `ca74cf8cbf19ac8708ba003671a8ebb5c18d8eafc1ef907068fa4f9e831f6390`, see `FRAME-CHECK-2026-11-27.md`): 23,975 such entries across 18,636 distinct repositories. It replaces the 13 November snapshot, which was not kept (Amendment 1). The registry only: servers outside it are out of scope. Exclusion: archived repositories, forks that only mirror another listed server, and the author's own projects. The snapshot of the registry listing is committed (names, versions, repository URLs, a SHA-256 of the file), so the frame can be reconstructed.
 
 ### Sample and split
-**The unit is the repository, not the registry entry**, so one monorepo that lists many servers is counted once. Repositories are put in a random order with a published seed (**20261114**), separately for TypeScript and Python, and the two lists are interleaved in proportion to their size in the frame. Walking that order, each repository is extracted (see below) and kept if it has at least one statically extractable tool definition; the walk stops at **500 repositories kept**, or at the end of the frame. Repositories skipped because nothing could be extracted are counted and reported, by reason. This is written down before any extraction so that "the first 500 that work" cannot be adjusted afterwards.
+**The unit is the repository, not the registry entry**, so one monorepo that lists many servers is counted once. Repositories are put in a random order with a published seed (**20261114**), separately for TypeScript and Python, and the two lists are interleaved in proportion to their size in the frame. (How the order and the two language lists are computed is fixed in Amendment 2.) Walking that order, each repository is extracted (see below) and kept if it has at least one statically extractable tool definition; the walk stops at **500 repositories kept**, or at the end of the frame. Repositories skipped because nothing could be extracted are counted and reported, by reason. This is written down before any extraction so that "the first 500 that work" cannot be adjusted afterwards.
 
 The 500 are split 50/50 by position in that order (odd and even) into a **development set** (used to read, label and, if needed, adjust rules) and a **held-out set** (touched only once, after the rules are frozen). Where a repository holds several servers, all of its extractable tools are analysed together and the repository is the unit in every rate.
 
@@ -55,7 +55,7 @@ Re-run extraction on the same servers 30 days after the snapshot (new SHAs, same
 - No server is scored as "safe". A zero means none was found by these methods in this sample.
 
 ## Reproducibility
-One command regenerates the frame, sample, extraction and tables from the committed registry snapshot (the 281 MB snapshot itself is not committed; its SHA-256 is, and `frame/snapshot_registry.py` re-creates it) (`make survey`, to be written in Phase 1). Recorded: registry snapshot hash, seed, per-server commit SHAs, parser and rule commits, tool versions. Raw descriptor text is **not** redistributed (it belongs to the servers' authors): the published dataset holds server identifiers, commit SHAs, the label, the rules that fired and a hash of each descriptor; the script re-fetches the text.
+The frame, the order and the extraction are regenerated from the committed registry snapshot by `survey.py` (`counts`, `order`, `extract`; the tables follow in Phase 4). The snapshot is committed in compact form: the latest version of each server, with the fields the frame needs. `frame/snapshot_registry.py` takes a new one, but the registry changes every day, so a new one is a different frame. Recorded: registry snapshot hash, seed, per-server commit SHAs, parser and rule commits, tool versions. Raw descriptor text is **not** redistributed (it belongs to the servers' authors): the published dataset holds server identifiers, commit SHAs, the label, the rules that fired and a hash of each descriptor; the script re-fetches the text.
 
 ## Ethics and disclosure
 - **Disclosure contact:** private reports go from the author to the maintainers; maintainers and anyone else reach the author at the address published on manzambi.com (joseph@manzambi.com).
@@ -69,6 +69,18 @@ One command regenerates the frame, sample, extraction and tables from the commit
 
 ## Threats to validity
 Static extraction misses dynamic descriptions and favours simple servers. The registry over-represents maintained projects, so rates are not rates for the whole ecosystem. A descriptor is not behaviour: a clean description can sit on a hostile handler. One labeller (or none for agreement) limits label quality. The constructed positives are the author's, so recall on them flatters the rules. These limits go in the write-up's first page.
+
+## Amendments
+
+Made before any sample is drawn, and recorded here so the change is visible.
+
+**Amendment 1 (27 November 2026): the frame snapshot.** The snapshot of 13 November (SHA-256 `eced3ccb...def2`, 20,289 entries across 17,232 repositories) was not kept: the 281 MB file was never committed, the script that made it was not committed either, and the file committed that day (`frame/registry-latest-2026-11-13.jsonl`) is the earlier partial pass of 5,209 servers that `FRAME-CHECK.md` says not to quote. That frame cannot be rebuilt. A new snapshot was taken on 27 November with `frame/snapshot_registry.py` and is committed in compact form. The frame is now 23,975 entries across 18,636 repositories. Nothing else in the design changes, and no data had been collected under the old frame.
+
+**Amendment 2 (27 November 2026): two details the first text left open.** Both are fixed now, in code with tests, so they cannot be chosen after seeing data.
+- *Language of a repository.* The registry does not give a language. A repository is TypeScript if its entries list npm packages and Python if they list PyPI packages. A repository with both goes where most of its entries are; a tie goes to TypeScript. On the new frame that is 13,826 TypeScript and 4,810 Python repositories.
+- *The random order.* Each list is sorted by the SHA-256 of `seed:owner/name`, with the seed 20261114 and the repository name in lower case. The two lists are then merged by always taking next from the list that is furthest behind its share. This gives the same order on any machine and in any language, which a library's random generator does not promise.
+
+**Amendment 3 (27 November 2026): the draw is locked in code.** `survey.py order` prints the walking order, which is the sample draw. It refuses to run unless the git tag `mcp-survey-protocol-v1` exists. The tag is created when decision 5 is settled, not before.
 
 ## Decisions
 1. **Sample size and frame: settled.** 500 repositories from the registry only, drawn over repositories with seed 20261114, stratified by language (see above).
