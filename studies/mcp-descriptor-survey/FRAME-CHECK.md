@@ -1,6 +1,8 @@
 # MCP descriptor survey: frame check (13 November 2026)
 
-**Status: a count of the sampling frame, not Phase 1.** No sample has been drawn, nothing has been extracted, and the protocol's open decisions are still open. This file records how big the frame is, so those decisions can be made with the number in front of you. It is an addendum: it does not change `PROTOCOL.md`.
+**Superseded on 27 November 2026 by `FRAME-CHECK-2026-11-27.md`.** The snapshot counted here was not kept, so these numbers cannot be reproduced. The file committed next to this one, `frame/registry-latest-2026-11-13.jsonl`, is the earlier partial pass (5,209 servers), not the snapshot this page describes. Kept as a record.
+
+**Status at the time: a count of the sampling frame, not Phase 1.** No sample has been drawn, nothing has been extracted, and the protocol's open decisions are still open. This file records how big the frame is, so those decisions can be made with the number in front of you. It is an addendum: it does not change `PROTOCOL.md`.
 
 ## What was done
 The official registry's listing was read in full through its public API (`frame/snapshot_registry.py`, a generic client name, a pause between pages): metadata only, no server or package downloaded or run. The listing has **250,627 entries** (every published version of every server). The raw file is 281 MB and is not committed. Its SHA-256, so the exact snapshot can be identified, is:
