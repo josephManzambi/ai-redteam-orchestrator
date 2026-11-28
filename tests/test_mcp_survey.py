@@ -244,3 +244,195 @@ def test_the_sample_draw_is_refused_until_the_protocol_is_tagged(monkeypatch, ca
     assert survey.main(["survey.py", "order", str(partial)]) == 3
     captured = capsys.readouterr()
     assert captured.out == "" and "not tagged" in captured.err
+
+
+# --- fetch -----------------------------------------------------------------------------
+
+fetch = _load("fetch", STUDY / "fetch.py")
+UNTIL = "2026-11-27T20:13:37Z"
+API = "https://api.github.com"
+
+
+def _tar(members: list[tuple]) -> bytes:
+    """A gzipped archive from (name, content | None, kind) rows."""
+    import io
+    import tarfile
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name, content, kind in members:
+            info = tarfile.TarInfo(name)
+            if kind == "file":
+                info.size = len(content)
+                tar.addfile(info, io.BytesIO(content))
+            else:
+                info.type = {"dir": tarfile.DIRTYPE, "symlink": tarfile.SYMTYPE, "hardlink": tarfile.LNKTYPE, "fifo": tarfile.FIFOTYPE}[kind]
+                info.linkname = content or ""
+                tar.addfile(info)
+    return buf.getvalue()
+
+
+class FakeGitHub:
+    """Answers by URL prefix and remembers every call with its headers."""
+
+    def __init__(self, routes: dict):
+        self.routes, self.calls = routes, []
+
+    def __call__(self, url, headers):
+        self.calls.append((url, dict(headers)))
+        for prefix, answer in self.routes.items():
+            if url.startswith(prefix):
+                status, head, body = answer
+                return status, head, body if isinstance(body, bytes) else json.dumps(body).encode()
+        return 404, {}, b'{"message": "Not Found"}'
+
+
+def _repo(**over):
+    return {"full_name": "Acme/Tools", "id": 7, "default_branch": "main", "archived": False, "fork": False,
+            "private": False, "visibility": "public", "disabled": False, **over}
+
+
+COMMIT = [{"sha": "a" * 40, "commit": {"committer": {"date": "2026-11-20T10:00:00Z"}}}]
+
+
+def test_the_snapshot_instant_is_the_latest_publication_time_in_the_committed_snapshot():
+    assert fetch.snapshot_instant([{"publishedAt": "2026-11-01T00:00:00.5Z"}, {"publishedAt": "2026-11-02T03:04:05.999Z"}, {}]) == "2026-11-02T03:04:05Z"
+    assert fetch.snapshot_instant(frame.load(STUDY / "frame" / "registry-latest-2026-11-27.jsonl.gz")) == UNTIL
+
+
+def test_fetch_takes_the_commit_at_the_snapshot_and_unpacks_plain_files_only(tmp_path):
+    archive = _tar([("acme-tools-aaaaaaa", None, "dir"),
+                    ("acme-tools-aaaaaaa/src/server.ts", b'server.tool("a", "b", {}, f)', "file"),
+                    ("acme-tools-aaaaaaa/README.md", b"hello", "file"),
+                    ("acme-tools-aaaaaaa/link", "/etc/passwd", "symlink"),
+                    ("acme-tools-aaaaaaa/hard", "acme-tools-aaaaaaa/README.md", "hardlink"),
+                    ("acme-tools-aaaaaaa/pipe", None, "fifo"),
+                    ("acme-tools-aaaaaaa/../../escape.txt", b"x", "file"),
+                    ("/abs/escape.txt", b"x", "file")])
+    gh = FakeGitHub({f"{API}/repos/acme/tools/commits": (200, {}, COMMIT),
+                     f"{API}/repos/acme/tools/tarball/": (302, {"location": "https://codeload.github.com/acme/tools/legacy.tar.gz/" + "a" * 40}, b""),
+                     "https://codeload.github.com/": (200, {}, archive),
+                     f"{API}/repos/acme/tools": (200, {}, _repo())})
+    row = fetch.fetch_repository("acme/tools", tmp_path / "out", {"acme/tools"}, UNTIL, transport=gh, token="tok-123")
+    assert row["status"] == "fetched" and row["reason"] is None
+    assert row["sha"] == "a" * 40 and row["commit_date"] == "2026-11-20T10:00:00Z" and row["snapshot_instant"] == UNTIL
+    assert row["files"] == 2 and row["bytes"] == len(b'server.tool("a", "b", {}, f)') + 5
+    assert row["left_out"] == {"links": 2, "special": 1, "outside": 2, "over_limit": 0}
+    assert sorted(p.relative_to(tmp_path / "out").as_posix() for p in (tmp_path / "out").rglob("*") if p.is_file()) == ["README.md", "src/server.ts"]
+    assert not (tmp_path / "escape.txt").exists() and not (tmp_path.parent / "escape.txt").exists()
+    # The commit asked for is the last one on the default branch up to the snapshot.
+    commits_call = next(u for u, _ in gh.calls if "/commits?" in u)
+    assert "sha=main" in commits_call and "until=2026-11-27T20%3A13%3A37Z" in commits_call and "per_page=1" in commits_call
+    # The token goes to the API and never to the archive host.
+    for url, headers in gh.calls:
+        assert ("Authorization" in headers) == url.startswith(API)
+        assert headers["User-Agent"].startswith("mcp-descriptor-survey/")
+    # The extractor reads what was unpacked.
+    assert extract.extract_repository(tmp_path / "out")["static"] == 1
+
+
+@pytest.mark.parametrize("answer, status, reason", [
+    ((404, {}, {"message": "Not Found"}), "unavailable", "not found"),
+    ((451, {}, {}), "unavailable", "blocked for legal reasons"),
+    ((500, {}, {}), "unavailable", "GitHub answered 500"),
+    ((200, {}, _repo(private=True, visibility="private")), "unavailable", "not public"),
+    ((200, {}, _repo(disabled=True)), "unavailable", "disabled"),
+    ((200, {}, _repo(archived=True)), "excluded", "archived"),
+])
+def test_a_repository_that_cannot_be_read_or_is_archived_is_not_downloaded(tmp_path, answer, status, reason):
+    gh = FakeGitHub({f"{API}/repos/acme/tools": answer})
+    row = fetch.fetch_repository("acme/tools", tmp_path / "out", set(), UNTIL, transport=gh)
+    assert (row["status"], row["reason"]) == (status, reason)
+    assert len(gh.calls) == 1 and not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("commits, reason", [
+    ((409, {}, {"message": "Git Repository is empty."}), "empty repository"),
+    ((200, {}, []), "no commit on the default branch at the snapshot"),
+    ((502, {}, {}), "commit list answered 502"),
+])
+def test_a_repository_with_no_commit_at_the_snapshot_is_unavailable(tmp_path, commits, reason):
+    gh = FakeGitHub({f"{API}/repos/acme/tools/commits": commits, f"{API}/repos/acme/tools": (200, {}, _repo())})
+    row = fetch.fetch_repository("acme/tools", tmp_path / "out", set(), UNTIL, transport=gh)
+    assert (row["status"], row["reason"]) == ("unavailable", reason)
+
+
+def _fork_routes(ahead):
+    return {f"{API}/repos/acme/tools/commits": (200, {}, COMMIT),
+            f"{API}/repos/up/stream/compare/": ahead,
+            f"{API}/repos/acme/tools": (200, {}, _repo(fork=True, parent={"full_name": "Up/Stream", "default_branch": "dev/main"}))}
+
+
+def test_a_fork_is_a_mirror_only_if_its_parent_is_listed_and_it_adds_no_commit():
+    mirror = FakeGitHub(_fork_routes((200, {}, {"ahead_by": 0, "behind_by": 12})))
+    row = fetch.describe("acme/tools", {"up/stream", "acme/tools"}, UNTIL, transport=mirror)
+    assert (row["status"], row["reason"], row["ahead_of_parent"]) == ("excluded", "mirror fork of up/stream", 0)
+    # The comparison is the parent's default branch against the fork's snapshot commit.
+    assert any(u == f"{API}/repos/up/stream/compare/dev%2Fmain...acme:{'a' * 40}" for u, _ in mirror.calls)
+
+    changed = FakeGitHub(_fork_routes((200, {}, {"ahead_by": 3})))
+    row = fetch.describe("acme/tools", {"up/stream"}, UNTIL, transport=changed)
+    assert (row["status"], row["ahead_of_parent"], row["parent"]) == ("ok", 3, "up/stream")
+
+    unlisted = FakeGitHub(_fork_routes((200, {}, {"ahead_by": 0})))
+    row = fetch.describe("acme/tools", {"someone/else"}, UNTIL, transport=unlisted)
+    assert row["status"] == "ok" and row["ahead_of_parent"] is None
+    assert not any("/compare/" in u for u, _ in unlisted.calls)
+
+    unknown = FakeGitHub(_fork_routes((404, {}, {})))
+    row = fetch.describe("acme/tools", {"up/stream"}, UNTIL, transport=unknown)
+    assert row["status"] == "ok" and row["ahead_of_parent"] == "compare answered 404"
+
+
+def test_a_renamed_repository_is_followed_on_the_api_host_only():
+    gh = FakeGitHub({f"{API}/repos/old/name": (301, {"location": f"{API}/repositories/7"}, b""),
+                     f"{API}/repositories/7": (200, {}, _repo(full_name="New/Name")),
+                     f"{API}/repos/new/name/commits": (200, {}, COMMIT)})
+    row = fetch.describe("old/name", set(), UNTIL, transport=gh)
+    assert (row["status"], row["repository"], row["full_name"], row["id"]) == ("ok", "old/name", "new/name", 7)
+    elsewhere = FakeGitHub({f"{API}/repos/old/name": (301, {"location": "https://example.org/x"}, b"")})
+    assert fetch.describe("old/name", set(), UNTIL, transport=elsewhere)["reason"] == "GitHub answered 301"
+    assert len(elsewhere.calls) == 1
+
+
+def test_the_rate_limit_stops_the_fetch_and_records_nothing():
+    gh = FakeGitHub({f"{API}/repos/acme/tools": (403, {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1795900000"}, {"message": "rate limit"})})
+    with pytest.raises(fetch.RateLimited, match="1795900000"):
+        fetch.describe("acme/tools", set(), UNTIL, transport=gh)
+
+
+def test_the_archive_must_come_from_githubs_archive_host_and_fit_the_limit(monkeypatch):
+    away = FakeGitHub({f"{API}/repos/a/b/tarball/": (302, {"location": "https://codeload.github.com.example.org/x"}, b"")})
+    with pytest.raises(RuntimeError, match="outside"):
+        fetch.download("a/b", "c" * 40, transport=away)
+    assert len(away.calls) == 1
+    monkeypatch.setattr(fetch, "MAX_ARCHIVE_BYTES", 10)
+    big = FakeGitHub({f"{API}/repos/a/b/tarball/": (302, {"location": "https://codeload.github.com/a/b"}, b""),
+                      "https://codeload.github.com/": (200, {}, b"x" * 11)})
+    assert fetch.download("a/b", "c" * 40, transport=big) is None
+
+
+def test_unpack_refuses_a_folder_that_is_not_empty_and_stops_at_the_size_limit(tmp_path, monkeypatch):
+    (tmp_path / "used").mkdir()
+    (tmp_path / "used" / "x").write_text("x")
+    with pytest.raises(RuntimeError, match="not empty"):
+        fetch.unpack(_tar([("top/a", b"1", "file")]), tmp_path / "used")
+    monkeypatch.setattr(fetch, "MAX_UNPACKED_BYTES", 5)
+    out = fetch.unpack(_tar([("top/a", b"1234", "file"), ("top/b", b"5678", "file"), ("top/c", b"9", "file")]), tmp_path / "new")
+    assert (out["files"], out["bytes"], out["left_out"]["over_limit"]) == (2, 5, 1)
+
+
+def test_fetch_is_refused_for_a_frame_repository_until_the_protocol_is_tagged(monkeypatch, capsys, tmp_path):
+    sys.path.insert(0, str(STUDY))
+    try:
+        survey = _load("survey_fetch", STUDY / "survey.py")
+    finally:
+        sys.path.remove(str(STUDY))
+    in_frame = next(iter(frame.build(frame.load(survey.latest_snapshot()))))
+    monkeypatch.setattr(survey, "protocol_is_tagged", lambda: False)
+    monkeypatch.setattr(survey.fetch, "fetch_repository", lambda *a, **k: pytest.fail("a frame repository was fetched"))
+    assert survey.main(["survey.py", "fetch", in_frame, str(tmp_path / "out")]) == 3
+    assert "not tagged" in capsys.readouterr().err
+    # A repository outside the frame can be fetched, which is how the tool is tried out.
+    monkeypatch.setattr(survey.fetch, "fetch_repository", lambda repo, dest, frame_repos, until, token=None: {"repository": repo, "until": until})
+    assert survey.main(["survey.py", "fetch", "Octocat/Hello-World", str(tmp_path / "out")]) == 0
+    assert json.loads(capsys.readouterr().out) == {"repository": "octocat/hello-world", "until": UNTIL}
