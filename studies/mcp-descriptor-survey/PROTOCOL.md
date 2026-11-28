@@ -1,6 +1,6 @@
 # MCP descriptor survey: study protocol
 
-**Status: pre-registration draft, decisions 1 to 3 settled on 14 November 2026, amended on 27 November 2026 (see Amendments). Nothing has been collected and no sample has been drawn.** This file is committed before any data is gathered, so the questions, the sample, the rules and the analysis are fixed first and anything that changes later is visible in git history. Two decisions are still open (the second labeller and the reviewer, see the end); the protocol is not tagged, and the sample is not drawn, until a reviewer is named.
+**Status: pre-registration draft, decisions 1 to 3 settled on 14 November 2026, amended on 27 and 28 November 2026 (see Amendments). Nothing has been collected and no sample has been drawn.** This file is committed before any data is gathered, so the questions, the sample, the rules and the analysis are fixed first and anything that changes later is visible in git history. Two decisions are still open (the second labeller and the reviewer, see the end); the protocol is not tagged, and the sample is not drawn, until a reviewer is named.
 
 ## Why this study
 
@@ -55,7 +55,7 @@ Re-run extraction on the same servers 30 days after the snapshot (new SHAs, same
 - No server is scored as "safe". A zero means none was found by these methods in this sample.
 
 ## Reproducibility
-The frame, the order and the extraction are regenerated from the committed registry snapshot by `survey.py` (`counts`, `order`, `extract`; the tables follow in Phase 4). The snapshot is committed in compact form: the latest version of each server, with the fields the frame needs. `frame/snapshot_registry.py` takes a new one, but the registry changes every day, so a new one is a different frame. Recorded: registry snapshot hash, seed, per-server commit SHAs, parser and rule commits, tool versions. Raw descriptor text is **not** redistributed (it belongs to the servers' authors): the published dataset holds server identifiers, commit SHAs, the label, the rules that fired and a hash of each descriptor; the script re-fetches the text.
+The frame, the order and the extraction are regenerated from the committed registry snapshot by `survey.py` (`counts`, `order`, `extract`, `fetch`; the tables follow in Phase 4). The snapshot is committed in compact form: the latest version of each server, with the fields the frame needs. `frame/snapshot_registry.py` takes a new one, but the registry changes every day, so a new one is a different frame. Recorded: registry snapshot hash, seed, per-server commit SHAs, parser and rule commits, tool versions. Raw descriptor text is **not** redistributed (it belongs to the servers' authors): the published dataset holds server identifiers, commit SHAs, the label, the rules that fired and a hash of each descriptor; the script re-fetches the text.
 
 ## Ethics and disclosure
 - **Disclosure contact:** private reports go from the author to the maintainers; maintainers and anyone else reach the author at the address published on manzambi.com (joseph@manzambi.com).
@@ -81,6 +81,11 @@ Made before any sample is drawn, and recorded here so the change is visible.
 - *The random order.* Each list is sorted by the SHA-256 of `seed:owner/name`, with the seed 20261114 and the repository name in lower case. The two lists are then merged by always taking next from the list that is furthest behind its share. This gives the same order on any machine and in any language, which a library's random generator does not promise.
 
 **Amendment 3 (27 November 2026): the draw is locked in code.** `survey.py order` prints the walking order, which is the sample draw. It refuses to run unless the git tag `mcp-survey-protocol-v1` exists. The tag is created when decision 5 is settled, not before.
+
+**Amendment 4 (28 November 2026): three details of fetching, fixed before any repository of the frame is read.** They are in `fetch.py` with tests.
+- *The snapshot instant.* "The commit current at the snapshot" is the last commit on the repository's default branch dated at or before **2026-11-27T20:13:37Z**. That instant is the latest publication time in the committed snapshot, to the second, so it is read from the file and not from a clock.
+- *A fork that only mirrors another listed server.* A repository is excluded as a mirror when GitHub marks it as a fork, its parent repository is in the frame, and at the snapshot commit it has no commit that the parent's default branch lacks. A fork of a repository outside the frame is kept. A fork that adds at least one commit is kept. If the comparison cannot be made, the fork is kept and the failed check is recorded.
+- *Unreadable repositories.* A repository that is gone, not public, disabled, empty, has no commit at the snapshot instant, or whose source archive is over 300 MB is skipped and counted by reason, like a repository with nothing to extract. Source is taken as an archive at the commit and unpacked as plain files; nothing from a repository is run. `survey.py fetch` refuses a repository of the frame until the protocol is tagged.
 
 ## Decisions
 1. **Sample size and frame: settled.** 500 repositories from the registry only, drawn over repositories with seed 20261114, stratified by language (see above).
